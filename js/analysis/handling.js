@@ -1,0 +1,334 @@
+/* Reads how the car behaved from the telemetry, without knowing which car it is.
+
+   Balance. For a car in its linear range, steering follows
+       steer ≈ K·curvature + C·lateralG
+   (geometry plus a constant understeer gradient). K and C are fitted from the
+   gentle-cornering samples of the laps being analysed. Near the limit, steering
+   beyond that line means the front is giving up (understeer); steering below it,
+   or opposite lock, means the rear is (oversteer). The gap is expressed as a
+   share of the steering the driver normally uses, so it is unit-free and works
+   with degrees (iRacing) or percent of lock (LMU).
+
+   Everything else (wheel speeds, tyre temperatures, ride height, brakes,
+   gearing) is used when the file has the channel and skipped when it does not.
+
+   Thresholds are general racing-car rules of thumb, not car-specific targets. */
+(function (root) {
+  'use strict';
+  const STA = (root.STA = root.STA || {});
+  const U = STA.util, G = STA.G, S = () => STA.session;
+
+  const PHASES = ['entry', 'mid', 'exit'], BANDS = ['low', 'medium', 'high'];
+  const BAND_TEXT = { low: 'slow corners (under 100 km/h)', medium: 'medium-speed corners (100–160 km/h)', high: 'fast corners (over 160 km/h)' };
+  const PHASE_TEXT = { entry: 'Corner entry', mid: 'Mid-corner', exit: 'Corner exit' };
+
+  function pickLaps(session, lapIdxs) {
+    if (lapIdxs && lapIdxs.length) return lapIdxs.map((i) => session.laps[i]).filter((l) => l && l.complete);
+    const timed = session.laps.filter((l) => l.complete && l.valid).sort((a, b) => a.time - b.time);
+    if (!timed.length) return session.laps.filter((l) => l.complete).slice(0, 3);
+    return timed.filter((l) => l.time <= timed[0].time * 1.03).slice(0, 6);
+  }
+
+  function conf(n) { return n >= 3 ? 'high' : n === 2 ? 'medium' : 'low'; }
+
+  function analyse(session, lapIdxs) {
+    const laps = pickLaps(session, lapIdxs);
+    const out = { laps: laps.map((l) => l.idx), lapNums: laps.map((l) => l.num), findings: [], balance: null, wheels: null, tyres: null, ride: null, brakes: null, gearing: null, notes: [] };
+    if (!laps.length || !session.corners.length) {
+      out.notes.push('Setup advice needs at least one complete lap with detectable corners.');
+      return out;
+    }
+    const grids = laps.map((l) => S().lapGrid(session, l));
+    const corners = session.corners, ch = session.ch;
+    const lapWord = laps.length === 1 ? '1 lap' : laps.length + ' laps';
+    const baseConf = laps.length >= 3 ? 'medium' : 'low';
+
+    /* ---------- balance from steering ---------- */
+    if (grids[0].steer && grids[0].latG) {
+      const absG = [], absS = [];
+      for (const g of grids) for (let i = 0; i < g.n; i += 2) if (g.speed[i] > 12) { absG.push(Math.abs(g.latG[i])); absS.push(Math.abs(g.steer[i])); }
+      const gmax = U.percentile(absG, 0.98), sRef = U.percentile(absS, 0.95) || 1;
+      let Skk = 0, Ska = 0, Saa = 0, Sks = 0, Sas = 0, nLin = 0;
+      for (const g of grids) {
+        for (let i = 0; i < g.n; i++) {
+          const v = g.speed[i], a = g.latG[i], aa = Math.abs(a);
+          if (!(v > 12) || aa < 0.1 * gmax || aa > 0.45 * gmax) continue;
+          const k = (a * G) / (v * v), s = g.steer[i];
+          Skk += k * k; Ska += k * a; Saa += a * a; Sks += k * s; Sas += a * s; nLin++;
+        }
+      }
+      let K = Skk > 0 ? Sks / Skk : NaN, C = 0;
+      const det = Skk * Saa - Ska * Ska;
+      if (nLin > 200 && det > 1e-9 * Skk * Saa) {
+        const K2 = (Sks * Saa - Sas * Ska) / det, C2 = (Skk * Sas - Ska * Sks) / det;
+        if (K2 > 0 && C2 > -0.5 * sRef / Math.max(gmax, 0.1)) { K = K2; C = C2; }
+      }
+      if (K > 0 && nLin > 100) {
+        const cells = {}, perCorner = {};
+        const add = (key, v) => (cells[key] = cells[key] || []).push(v);
+        let counter = 0, nearLimit = 0;
+        const counterBy = { entry: 0, mid: 0, exit: 0 }, nearBy = { entry: 0, mid: 0, exit: 0 };
+        grids.forEach((g) => {
+          corners.forEach((c, ci) => {
+            const st = S().cornerStats(g, c, ci > 0 ? corners[ci - 1].b : null);
+            const half = Math.max(Math.round(8 / g.step), Math.round(0.12 * (c.b - c.a)));
+            for (let i = c.a; i <= c.b; i++) {
+              const v = g.speed[i], a = g.latG[i];
+              if (!(v > 8) || Math.abs(a) < 0.5 * gmax) continue;
+              const k = (a * G) / (v * v), sg = Math.sign(a);
+              const e = ((g.steer[i] - K * k - C * a) * sg) / sRef;
+              const ph = Math.abs(i - st.iMin) <= half ? 'mid' : i < st.iMin ? 'entry' : 'exit';
+              add(ph + '|' + c.band, e); add(ph, e);
+              const pk = c.name + '|' + ph; (perCorner[pk] = perCorner[pk] || []).push(e);
+              nearLimit++; nearBy[ph]++;
+              if (g.steer[i] * sg < -0.03 * sRef) { counter++; counterBy[ph]++; }
+            }
+          });
+        });
+        const cell = (key) => { const a = cells[key] || []; return { n: a.length, idx: a.length >= 25 ? U.median(a) : null }; };
+        const matrix = {};
+        for (const ph of PHASES) { matrix[ph] = { all: cell(ph) }; for (const b of BANDS) matrix[ph][b] = cell(ph + '|' + b); }
+        const cornerIdx = {};
+        for (const key of Object.keys(perCorner)) if (perCorner[key].length >= 8) cornerIdx[key] = U.median(perCorner[key]);
+        out.balance = { K, C, steerRef: sRef, gmax, linearSamples: nLin, matrix, cornerIdx, counterShare: nearLimit ? counter / nearLimit : 0,
+          counterBy: { entry: nearBy.entry ? counterBy.entry / nearBy.entry : 0, mid: nearBy.mid ? counterBy.mid / nearBy.mid : 0, exit: nearBy.exit ? counterBy.exit / nearBy.exit : 0 } };
+
+        const US = 0.25, OS = -0.10;
+        for (const ph of PHASES) {
+          for (const b of BANDS) {
+            const m = matrix[ph][b];
+            if (m.idx == null) continue;
+            const names = corners.filter((c) => c.band === b).filter((c) => cornerIdx[c.name + '|' + ph] != null);
+            if (m.idx >= US) {
+              const worst = names.filter((c) => cornerIdx[c.name + '|' + ph] >= US).map((c) => c.name);
+              out.findings.push({
+                id: 'us-' + ph + '-' + b, kind: 'understeer', phase: ph, band: b, area: 'Balance',
+                title: PHASE_TEXT[ph] + ' understeer in ' + BAND_TEXT[b],
+                detail: 'Near the grip limit you are holding ' + Math.round(m.idx * 100) + '% of your usual steering range more lock than the car needs when it is gripping. The front is running out of grip first.',
+                evidence: (worst.length ? 'Strongest in ' + worst.join(', ') + '. ' : '') + 'Based on ' + lapWord + '.',
+                severity: U.clamp((m.idx - 0.2) / 0.5, 0.1, 1), confidence: baseConf, corners: worst,
+              });
+            } else if (m.idx <= OS) {
+              const worst = names.filter((c) => cornerIdx[c.name + '|' + ph] <= OS).map((c) => c.name);
+              out.findings.push({
+                id: 'os-' + ph + '-' + b, kind: 'oversteer', phase: ph, band: b, area: 'Balance',
+                title: PHASE_TEXT[ph] + ' oversteer in ' + BAND_TEXT[b],
+                detail: 'Near the grip limit you are using ' + Math.round(-m.idx * 100) + '% of your usual steering range less lock than the car needs when it is gripping. The rear is rotating the car for you.',
+                evidence: (worst.length ? 'Strongest in ' + worst.join(', ') + '. ' : '') + 'Based on ' + lapWord + '.',
+                severity: U.clamp((-m.idx) / 0.4, 0.1, 1), confidence: baseConf, corners: worst,
+              });
+            }
+          }
+        }
+        // A phase that is fine on average can still have individual corners that are clearly not.
+        for (const ph of PHASES) {
+          for (const [kind, test] of [['understeer', (v) => v >= 0.35], ['oversteer', (v) => v <= -0.15]]) {
+            if (out.findings.some((f) => f.kind === kind && f.phase === ph)) continue;
+            const list = corners.filter((c) => cornerIdx[c.name + '|' + ph] != null && test(cornerIdx[c.name + '|' + ph]));
+            if (list.length < 2) continue;
+            const counts = { low: 0, medium: 0, high: 0 }; list.forEach((c) => counts[c.band]++);
+            const band = BANDS.reduce((a, b) => (counts[b] > counts[a] ? b : a), 'low');
+            const mean = U.mean(list.map((c) => cornerIdx[c.name + '|' + ph]));
+            out.findings.push({
+              id: (kind === 'understeer' ? 'us-' : 'os-') + ph + '-' + band, kind, phase: ph, band, area: 'Balance',
+              title: PHASE_TEXT[ph] + ' ' + kind + ' in ' + list.map((c) => c.name).join(', '),
+              detail: kind === 'understeer'
+                ? 'In these corners you hold about ' + Math.round(mean * 100) + '% of your usual steering range more lock than the car needs when it is gripping. The front runs out of grip first there.'
+                : 'In these corners you use about ' + Math.round(-mean * 100) + '% of your usual steering range less lock than the car needs when it is gripping. The rear is rotating the car there.',
+              evidence: 'Other corners are closer to neutral in this phase. Based on ' + lapWord + '.',
+              severity: U.clamp(Math.abs(mean) / 0.7, 0.2, 0.8), confidence: baseConf, corners: list.map((c) => c.name),
+            });
+          }
+        }
+        for (const ph of PHASES) {
+          const share = out.balance.counterBy[ph];
+          if (share >= 0.03 && !out.findings.some((f) => f.kind === 'oversteer' && f.phase === ph)) {
+            out.findings.push({
+              id: 'os-counter-' + ph, kind: 'oversteer', phase: ph, band: 'low', area: 'Balance',
+              title: PHASE_TEXT[ph] + ' oversteer (opposite lock)',
+              detail: 'You are on opposite lock for ' + (share * 100).toFixed(1) + '% of the time spent near the limit in this phase, which means catching the rear.',
+              evidence: 'Based on ' + lapWord + '.', severity: U.clamp(share / 0.1, 0.2, 1), confidence: baseConf, corners: [],
+            });
+          }
+        }
+      } else out.notes.push('Not enough gentle cornering in these laps to calibrate steering against cornering, so balance could not be judged from steering.');
+    } else out.notes.push('No steering or lateral G channel, so balance could not be judged.');
+
+    /* ---------- traction on exit: driver lifts and traction-control activity ---------- */
+    {
+      const hits = {}, tcBy = {}; let exits = 0, tcOn = 0, tcN = 0;
+      const haveTc = !!grids[0].tc;
+      grids.forEach((g) => {
+        const pedal = g.throttleRaw || g.throttle;
+        corners.forEach((c, ci) => {
+          const st = S().cornerStats(g, c, ci > 0 ? corners[ci - 1].b : null);
+          const next = ci < corners.length - 1 ? corners[ci + 1].a : g.n - 1;
+          const end = Math.min(g.n - 1, next, c.b + Math.round(60 / g.step));
+          let started = false, peak = 0, low = 0, lifted = false, cOn = 0, cN = 0;
+          for (let i = st.iMin; i <= end; i++) {
+            const th = pedal[i];
+            if (haveTc && th > 0.3) { cN++; if (g.tc[i] > 0.5) cOn++; }
+            if (lifted) continue;
+            if (!started) { if (th > 0.3) { started = true; peak = th; } continue; }
+            if (th > 0.97) { started = false; peak = 2; continue; } // reached full throttle: later dips are gear changes
+            if (th > peak) peak = th;
+            if (peak <= 1 && peak - th > 0.2 && g.brake[i] < 0.05) { if (++low * g.step >= 3) lifted = true; } else low = 0;
+          }
+          if (cN) { tcOn += cOn; tcN += cN; if (cOn / cN > 0.25) tcBy[c.name] = (tcBy[c.name] || 0) + 1; }
+          exits++; if (lifted && c.band !== 'high') hits[c.name] = (hits[c.name] || 0) + 1;
+        });
+      });
+      const need = Math.max(1, Math.ceil(laps.length / 2));
+      const repeat = Object.keys(hits).filter((k) => hits[k] >= need), tcRepeat = Object.keys(tcBy).filter((k) => tcBy[k] >= need);
+      out.exits = { lifts: hits, repeat, tcShare: tcN ? tcOn / tcN : null, tcCorners: tcRepeat, exits };
+      const exitIdx = out.balance ? out.balance.matrix.exit.all.idx : null;
+      if (repeat.length >= 2) {
+        const front = exitIdx != null && exitIdx >= 0.25;
+        if (!out.findings.some((f) => f.phase === 'exit' && f.kind === (front ? 'understeer' : 'oversteer'))) {
+          out.findings.push({
+            id: 'exit-lift', kind: front ? 'understeer' : 'traction', phase: 'exit', band: 'low', area: 'Traction',
+            title: front ? 'Lifting on exit to wait for the front' : 'Lifting on exit to keep the rear in line',
+            detail: 'After getting back on the throttle you come off it again before reaching full throttle in ' + repeat.join(', ') + '.',
+            evidence: 'Seen on at least half of the ' + lapWord + ' analysed.', severity: U.clamp(repeat.length / 5, 0.3, 0.9), confidence: baseConf, corners: repeat,
+          });
+        }
+      }
+      if (out.exits.tcShare != null && out.exits.tcShare > 0.15 && tcRepeat.length >= 2) {
+        out.findings.push({
+          id: 'tc-busy', kind: 'traction', phase: 'exit', band: 'low', area: 'Traction',
+          title: 'Traction control is doing a lot of work on exit',
+          detail: 'Traction control is cutting power for ' + Math.round(out.exits.tcShare * 100) + '% of the time you are on the throttle out of corners, mostly in ' + tcRepeat.join(', ') + '. Rear grip, not engine power, is limiting your exits.',
+          evidence: 'Traction-control channel, ' + lapWord + '.', severity: U.clamp(out.exits.tcShare / 0.5, 0.3, 0.9), confidence: conf(laps.length), corners: tcRepeat, tcBusy: true,
+        });
+      }
+    }
+
+    /* ---------- wheel speeds: locking and wheelspin ---------- */
+    if (grids[0].wheelSpeed) {
+      let brakeN = 0, fLock = 0, rLock = 0, powN = 0, rSpin = 0, fSpin = 0, absOn = 0;
+      for (const g of grids) {
+        const w = g.wheelSpeed;
+        for (let i = 0; i < g.n; i++) {
+          const v = g.speed[i]; if (!(v > 12)) continue;
+          if (g.brake[i] > 0.3) {
+            brakeN++;
+            if (Math.min(w[0][i], w[1][i]) < 0.86 * v) fLock++;
+            if (Math.min(w[2][i], w[3][i]) < 0.86 * v) rLock++;
+            if (g.abs && g.abs[i] > 0.5) absOn++;
+          } else if (g.throttle[i] > 0.5 && g.speed[i] < 55) {
+            powN++;
+            const f = (w[0][i] + w[1][i]) / 2, r = (w[2][i] + w[3][i]) / 2;
+            if (r > f * 1.06) rSpin++; else if (f > r * 1.06) fSpin++;
+          }
+        }
+      }
+      out.wheels = { frontLock: brakeN ? fLock / brakeN : 0, rearLock: brakeN ? rLock / brakeN : 0, rearSpin: powN ? rSpin / powN : 0,
+        frontSpin: powN ? fSpin / powN : 0, absShare: brakeN && grids[0].abs ? absOn / brakeN : null };
+      const W = out.wheels;
+      if (W.frontLock > 0.04 && W.frontLock > W.rearLock * 1.5) out.findings.push({ id: 'front-lock', kind: 'frontLock', area: 'Braking', title: 'Front wheels locking under braking',
+        detail: 'A front wheel is turning at least 14% slower than the car for ' + (W.frontLock * 100).toFixed(1) + '% of hard braking.', evidence: 'Wheel-speed channels, ' + lapWord + '.', severity: U.clamp(W.frontLock / 0.15, 0.2, 1), confidence: conf(laps.length) });
+      if (W.rearLock > 0.03 && W.rearLock >= W.frontLock) out.findings.push({ id: 'rear-lock', kind: 'rearLock', area: 'Braking', title: 'Rear wheels locking under braking',
+        detail: 'A rear wheel is turning at least 14% slower than the car for ' + (W.rearLock * 100).toFixed(1) + '% of hard braking, which makes the car unstable on entry.', evidence: 'Wheel-speed channels, ' + lapWord + '.', severity: U.clamp(W.rearLock / 0.1, 0.3, 1), confidence: conf(laps.length) });
+      const spin = Math.max(W.rearSpin, W.frontSpin), axle = W.rearSpin >= W.frontSpin ? 'rear' : 'front';
+      if (spin > 0.05) out.findings.push({ id: 'wheelspin', kind: 'wheelspin', axle, area: 'Traction', title: 'Wheelspin on the ' + axle + ' axle under power',
+        detail: 'The ' + axle + ' wheels run at least 6% faster than the other axle for ' + (spin * 100).toFixed(1) + '% of low-speed acceleration.', evidence: 'Wheel-speed channels, ' + lapWord + '.', severity: U.clamp(spin / 0.2, 0.2, 1), confidence: conf(laps.length) });
+    }
+
+    /* ---------- tyres ---------- */
+    if (ch.tyreTempI && ch.tyreTempM && ch.tyreTempO) {
+      const live = session.meta.sim === 'lmu';
+      const val = (name, w) => {
+        if (!live) { // iRacing: readings only refresh in the pits; use the last value in the file
+          const a = ch[name][w]; return a[a.length - 1];
+        }
+        let s = 0, n = 0;
+        for (const g of grids) { const a = g[name][w]; for (let i = 0; i < g.n; i += 4) { if (a[i] === a[i]) { s += a[i]; n++; } } }
+        return n ? s / n : NaN;
+      };
+      const rows = STA.WHEELS.map((name, w) => {
+        const inner = val('tyreTempI', w), mid = val('tyreTempM', w), outer = val('tyreTempO', w);
+        const press = ch.tyrePress ? val('tyrePress', w) : null;
+        return { wheel: name, inner, mid, outer, avg: (inner + mid + outer) / 3, spread: inner - outer, crown: mid - (inner + outer) / 2, press };
+      });
+      const warm = rows.every((r) => r.avg > 40);
+      out.tyres = { rows, live, warm, note: live ? 'Surface temperatures averaged over the analysed laps.' : session.meta.tyreNote };
+      if (warm) {
+        const tConf = live ? baseConf : 'low';
+        for (const [axle, a, b] of [['front', 0, 1], ['rear', 2, 3]]) {
+          const spread = (rows[a].spread + rows[b].spread) / 2, crown = (rows[a].crown + rows[b].crown) / 2;
+          if (spread > 16) out.findings.push({ id: 'camber-much-' + axle, kind: 'camberTooMuch', axle, area: 'Tyres', title: 'Too much negative camber on the ' + axle + ' axle',
+            detail: 'The inner edge runs ' + spread.toFixed(0) + ' °C hotter than the outer edge. A spread of roughly 5–12 °C usually uses the whole tread.', evidence: out.tyres.note, severity: U.clamp((spread - 12) / 15, 0.2, 0.8), confidence: tConf });
+          else if (spread < 2) out.findings.push({ id: 'camber-little-' + axle, kind: 'camberTooLittle', axle, area: 'Tyres', title: 'Not enough negative camber on the ' + axle + ' axle',
+            detail: 'The inner edge is only ' + spread.toFixed(0) + ' °C hotter than the outer edge, so the outer shoulder is doing too much of the work in corners.', evidence: out.tyres.note, severity: U.clamp((5 - spread) / 12, 0.2, 0.8), confidence: tConf });
+          if (crown > 5) out.findings.push({ id: 'press-high-' + axle, kind: 'pressureHigh', axle, area: 'Tyres', title: axle === 'front' ? 'Front tyre pressures look high' : 'Rear tyre pressures look high',
+            detail: 'The middle of the tread runs ' + crown.toFixed(0) + ' °C hotter than the average of the edges, a sign the tyre is crowning.', evidence: out.tyres.note, severity: 0.3, confidence: 'low' });
+          else if (crown < -7) out.findings.push({ id: 'press-low-' + axle, kind: 'pressureLow', axle, area: 'Tyres', title: axle === 'front' ? 'Front tyre pressures look low' : 'Rear tyre pressures look low',
+            detail: 'The middle of the tread runs ' + (-crown).toFixed(0) + ' °C cooler than the average of the edges.', evidence: out.tyres.note, severity: 0.3, confidence: 'low' });
+        }
+        const fAvg = (rows[0].avg + rows[1].avg) / 2, rAvg = (rows[2].avg + rows[3].avg) / 2;
+        out.tyres.frontMinusRear = fAvg - rAvg;
+        // Tyre temperatures back up (or contradict) the steering-based balance.
+        for (const f of out.findings) {
+          if (f.area !== 'Balance') continue;
+          if ((f.kind === 'understeer' && fAvg - rAvg > 6) || (f.kind === 'oversteer' && rAvg - fAvg > 6)) {
+            f.evidence += ' Tyre temperatures agree: the ' + (f.kind === 'understeer' ? 'fronts' : 'rears') + ' run ' + Math.abs(fAvg - rAvg).toFixed(0) + ' °C hotter.';
+            if (live && f.confidence === 'medium') f.confidence = 'high';
+          }
+        }
+      } else out.notes.push('Tyres were not up to temperature in these laps, so tyre-based advice is left out.');
+    }
+
+    /* ---------- ride height ---------- */
+    {
+      let fMin = Infinity, rMin = Infinity, have = false, fLow = 0, rLow = 0, cnt = 0;
+      for (const g of grids) {
+        const f = g.rideH ? [g.rideH[0], g.rideH[1]] : g.rideF ? [g.rideF] : null, r = g.rideH ? [g.rideH[2], g.rideH[3]] : g.rideR ? [g.rideR] : null;
+        if (!f || !r) continue; have = true;
+        for (let i = 0; i < g.n; i++) {
+          if (!(g.speed[i] > 20)) continue; cnt++;
+          let fv = Infinity, rv = Infinity;
+          for (const a of f) if (a[i] < fv) fv = a[i];
+          for (const a of r) if (a[i] < rv) rv = a[i];
+          if (fv < fMin) fMin = fv; if (rv < rMin) rMin = rv;
+          if (fv < 0.004) fLow++; if (rv < 0.004) rLow++;
+        }
+      }
+      if (have && cnt) {
+        out.ride = { frontMinMm: fMin * 1000, rearMinMm: rMin * 1000, frontLowShare: fLow / cnt, rearLowShare: rLow / cnt };
+        for (const [axle, share, mn] of [['front', fLow / cnt, fMin], ['rear', rLow / cnt, rMin]]) {
+          if (share > 0.004) out.findings.push({ id: 'bottom-' + axle, kind: 'bottoming', axle, area: 'Ride height', title: 'The ' + axle + ' of the car is close to the ground at speed',
+            detail: 'Logged ' + axle + ' ride height drops below 4 mm for ' + (share * 100).toFixed(1) + '% of the lap (minimum ' + (mn * 1000).toFixed(1) + ' mm). If the car feels like it skates or snaps over bumps and kerbs, it is touching down.',
+            evidence: 'Ride-height channel, ' + lapWord + '. Where the sim measures ride height differs by car, so treat this as a prompt to check.', severity: U.clamp(share / 0.03, 0.2, 0.8), confidence: 'low' });
+        }
+      }
+    }
+
+    /* ---------- brakes ---------- */
+    if (grids[0].brakeTemp) {
+      const peak = [0, 0, 0, 0];
+      for (const g of grids) for (let w = 0; w < 4; w++) { const m = U.minMax(g.brakeTemp[w])[1]; if (m > peak[w]) peak[w] = m; }
+      out.brakes = { peak };
+      const fMax = Math.max(peak[0], peak[1]), rMax = Math.max(peak[2], peak[3]);
+      if (fMax > 850 || rMax > 850) out.findings.push({ id: 'brake-hot', kind: 'brakeHot', axle: fMax >= rMax ? 'front' : 'rear', area: 'Braking', title: 'Brake temperatures are very high',
+        detail: 'Peak disc temperature reached ' + Math.max(fMax, rMax).toFixed(0) + ' °C on the ' + (fMax >= rMax ? 'front' : 'rear') + ' axle.', evidence: 'Brake temperature channel, ' + lapWord + '. Safe limits depend on the disc material.', severity: 0.4, confidence: 'low' });
+    }
+
+    /* ---------- gearing ---------- */
+    if (session.meta.maxRpm && grids[0].rpm && grids[0].gear) {
+      let top = 0; for (const g of grids) { const m = U.minMax(g.gear)[1]; if (m > top) top = m; }
+      let lim = 0, tot = 0;
+      for (const g of grids) for (let i = 1; i < g.n; i++) {
+        const dt = g.t[i] - g.t[i - 1]; if (!(dt > 0)) continue; tot += dt;
+        if (g.gear[i] === top && g.throttle[i] > 0.95 && g.rpm[i] > 0.985 * session.meta.maxRpm) lim += dt;
+      }
+      out.gearing = { topGear: top, limiterShare: tot ? lim / tot : 0 };
+      if (out.gearing.limiterShare > 0.015) out.findings.push({ id: 'limiter', kind: 'limiter', area: 'Gearing', title: 'On the rev limiter in top gear',
+        detail: 'Flat out in gear ' + top + ' the engine sits within 1.5% of maximum revs for ' + (out.gearing.limiterShare * 100).toFixed(1) + '% of the lap, so top speed is capped by gearing.', evidence: 'RPM and gear channels, ' + lapWord + '.', severity: 0.5, confidence: conf(laps.length) });
+    }
+
+    out.findings.sort((a, b) => b.severity - a.severity);
+    return out;
+  }
+
+  STA.handling = { analyse, pickLaps, PHASES, BANDS, BAND_TEXT, PHASE_TEXT };
+})(typeof window !== 'undefined' ? window : globalThis);

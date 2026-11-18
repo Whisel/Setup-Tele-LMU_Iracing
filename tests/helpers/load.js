@@ -1,0 +1,7 @@
+// Loads the app's non-UI modules into Node (they attach to globalThis.STA).
+const path = require('path');
+const root = path.join(__dirname, '..', '..', 'js');
+for (const f of ['core/util', 'io/yaml-lite', 'io/ibt', 'io/lmu', 'model/setup', 'model/session', 'analysis/handling', 'analysis/advisor', 'analysis/baseline', 'store/library']) {
+  require(path.join(root, f + '.js'));
+}
+module.exports = globalThis.STA;

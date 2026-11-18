@@ -1,0 +1,7 @@
+node_modules/
+*.ibt
+*.duckdb
+*.duckdb.wal
+vendor/duckdb/*.wasm
+vendor/duckdb/*.worker.js
+.DS_Store
