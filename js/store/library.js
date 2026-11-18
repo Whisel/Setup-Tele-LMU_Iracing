@@ -111,20 +111,42 @@
   async function removeSession(id) { await (await open()).del('sessions', id); }
 
   async function exportAll() {
-    return { app: 'setup-telemetry', version: 1, exportedAt: new Date().toISOString(), setups: await setups(), sessions: await sessions() };
+    return { app: 'setup-telemetry', version: 1, exportedAt: new Date().toISOString(), setups: await setups(), sessions: await sessions(), blocked: blockedAll() };
   }
   async function importAll(data) {
     if (!data || data.app !== 'setup-telemetry' || !Array.isArray(data.setups)) throw new Error('This is not a library export from this app.');
     const b = await open();
     for (const s of data.setups) if (s && s.id && Array.isArray(s.params)) await b.put('setups', s);
     for (const s of data.sessions || []) if (s && s.id) await b.put('sessions', s);
+    if (data.blocked && typeof data.blocked === 'object') {
+      for (const k of Object.keys(data.blocked)) if (Array.isArray(data.blocked[k])) blockedAll()[k] = Array.from(new Set((blockedAll()[k] || []).concat(data.blocked[k].map(String))));
+      blockedSave();
+    }
     return { setups: data.setups.length, sessions: (data.sessions || []).length };
   }
-  async function clearAll() { const b = await open(); await b.clear('setups'); await b.clear('sessions'); }
+  async function clearAll() { const b = await open(); await b.clear('setups'); await b.clear('sessions'); blocked.clear(); }
+
+  /* Changes the driver has marked as "not possible on this car", per sim and car.
+     Small, so it lives in localStorage; falls back to memory if that is unavailable. */
+  let blockedMem = null;
+  function blockedAll() {
+    if (blockedMem) return blockedMem;
+    try { blockedMem = JSON.parse(root.localStorage.getItem('sta-blocked') || '{}') || {}; } catch (e) { blockedMem = {}; }
+    return blockedMem;
+  }
+  function blockedSave() { try { root.localStorage.setItem('sta-blocked', JSON.stringify(blockedMem)); } catch (e) { /* kept for this visit only */ } }
+  const carKey = (sim, car) => sim + '|' + U.slug(car);
+  const blocked = {
+    list: (sim, car) => (blockedAll()[carKey(sim, car)] || []).slice(),
+    set: (sim, car) => new Set(blockedAll()[carKey(sim, car)] || []),
+    add: (sim, car, key) => { const all = blockedAll(), k = carKey(sim, car); all[k] = Array.from(new Set((all[k] || []).concat(key))); blockedSave(); },
+    remove: (sim, car, key) => { const all = blockedAll(), k = carKey(sim, car); all[k] = (all[k] || []).filter((x) => x !== key); blockedSave(); },
+    clear: () => { blockedMem = {}; blockedSave(); },
+  };
 
   const sameCar = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
   const sameTrack = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
 
-  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack,
+  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked,
     get persistent() { return backend ? backend.persistent : null; } };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -45,7 +45,9 @@ telemetry and the setup that was on the car.
 can be dropped in directly. **Scan a folder for setups** reads the setup out of every
 `.svm`, `.ibt` and `.duckdb` file in a folder without loading the telemetry, which is the
 quick way to tell the app what you have already been running. iRacing `.sto` setup files
-are a closed format and cannot be read; load an `.ibt` driven on that setup instead.
+are encrypted and this app does not read or write them; load an `.ibt` driven on that
+setup instead. Telemetry recording is off until you press Alt+L, and the telemetry folder
+does not exist until the first recording.
 
 ## How the setup advice works
 
@@ -63,10 +65,21 @@ setup that was on the car.
 - **Other checks**, used when the file has the channel: wheel speeds (locking, wheelspin),
   traction-control activity, throttle lifts on exit, tyre temperature spread across the
   tread, ride height, brake temperatures, and time on the rev limiter in top gear.
-- **Suggestions** are ordered most useful first. A setting the car does not have, or that
-  is already at the end of its range, is skipped and listed separately. Where the sim
-  stores a setting as a step number (most LMU settings), the app tells you how many steps
-  to move rather than inventing a value.
+- **Suggestions** are ordered most useful first. Where the sim stores a setting as a step
+  number (most LMU settings), the app tells you how many steps to move rather than
+  inventing a value.
+- **When a change cannot be made, the app looks for another way to get the same effect.**
+  A setting the car does not have, or one already at the end of its range, is skipped and
+  the nearest equivalent is used instead: for example, if the rear anti-roll bar is
+  already disconnected, the app stiffens the front bar, or softens the rear springs,
+  rather than asking for a softer rear bar. What was skipped, and why, is listed under the
+  suggestions.
+- **"Not possible on this car".** LMU reports each setting's range, so the app knows its
+  limits. iRacing does not, so there the app only knows a limit when the value itself says
+  so (a bar that reads "Disconnected", a setting at zero). If it still suggests something
+  the garage will not allow, press **Not possible on this car** on that suggestion. The
+  app remembers it for that car, stops suggesting it, and re-plans around it. It can be
+  undone from the list under the suggestions.
 
 Each finding carries a confidence level:
 
@@ -124,6 +137,8 @@ browser or computer.
 - **Mislabelled channels.** LMU stores lateral and longitudinal G under each other's
   names. The app checks both against speed and the driven path and swaps them when needed,
   and tells you when it has.
+- **iRacing setting ranges are not known to the app.** See "Not possible on this car"
+  above.
 - **The advice is general.** It has no per-car targets for tyre pressures, temperatures or
   ride heights, and it cannot tell you the lap time a change is worth.
 

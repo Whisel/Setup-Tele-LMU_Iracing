@@ -334,7 +334,24 @@
     return { moved, atLimit: false };
   }
 
+  /* Why a setting cannot move further in a direction ('+' or '-'), or null if it can
+     (or if the app cannot tell). LMU gives a step range. iRacing does not, so there
+     the app relies on what the value itself says: a bar that reads "Disconnected"
+     or a setting already at zero has nowhere lower to go. */
+  const FLOOR_WORDS = /disconnect|detach|unhook|removed|not fitted|\bnone\b|\boff\b/i;
+  const NEVER_NEGATIVE = { arb: 1, spring: 1, thirdSpring: 1, packers: 1, rearWing: 1, frontAero: 1, slowBump: 1, slowRebound: 1, fastBump: 1,
+    fastRebound: 1, diffPreload: 1, diffPower: 1, diffCoast: 1, tc: 1, abs: 1, brakePressure: 1, engineBraking: 1 };
+  function limitReason(p, dir) {
+    if (p.index != null && p.min != null && p.max != null) {
+      return (dir === '+' ? p.index >= p.max : p.index <= p.min) ? 'already at the end of its range (' + p.raw + ')' : null;
+    }
+    const raw = String(p.was != null ? p.was : p.raw).trim();
+    if (dir === '-' && FLOOR_WORDS.test(raw)) return 'already ' + raw.toLowerCase();
+    if (dir === '-' && NEVER_NEGATIVE[p.role] && U.isNum(p.num) && p.num <= 0 && !/deg|°/i.test(p.unit || '')) return 'already at ' + raw;
+    return null;
+  }
+
   function refresh(setup) { delete setup.id; delete setup.fingerprint; return finish(setup); }
 
-  STA.setup = { fromIracing, fromLmuJson, fromSvm, byRole, describe, diff, clone, applyChange, refresh, parseNum, sentence, classify };
+  STA.setup = { fromIracing, fromLmuJson, fromSvm, byRole, describe, diff, clone, applyChange, limitReason, refresh, parseNum, sentence, classify };
 })(typeof window !== 'undefined' ? window : globalThis);

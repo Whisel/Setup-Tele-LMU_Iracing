@@ -94,7 +94,7 @@
       if (tnd.count < 2) continue;
       const opt = STA.advisor.ruleFor(tnd).find((x) => {
         const axle = x.axle === '@' ? tnd.axle : x.axle;
-        return STA.setup.byRole(reference, x.role, axle || undefined).length > 0;
+        return STA.advisor.resolve(reference, x.role, axle || null, x.dir, opts.blocked || null).params.length > 0;
       });
       if (!opt) continue;
       want(opt.role, opt.axle === '@' ? tnd.axle : opt.axle, opt.dir === '+' ? 1 : -1, 'Seen in ' + tnd.count + ' earlier sessions: ' + tnd.title);
@@ -106,26 +106,35 @@
       source: 'baseline', parentId: reference.id, status: 'in progress', tags: {},
     });
     for (const p of setup.params) delete p.note;
-    const changes = [], notApplied = [];
+    const changes = [], notApplied = [], blocked = opts.blocked || null, touched = new Set();
     for (const e of net.values()) {
       if (!e.n) continue;
       const n = U.clamp(e.n, -3, 3), dir = n > 0 ? '+' : '-';
-      let params = STA.setup.byRole(setup, e.role, e.axle || undefined);
-      if (e.role === 'brakeBias') params = params.filter((p) => !/fine|peak|migration/.test(p.id)).slice(0, 1);
-      const label = STA.advisor.labelFor(e.role, e.axle);
       const why = Array.from(new Set(e.why)).join('; ');
-      if (!params.length) { notApplied.push({ label, why, reason: 'not adjustable on this car' }); continue; }
-      const change = STA.advisor.buildChange(e.role, dir, params, Math.abs(n));
-      const from = STA.setup.describe(params);
-      let applied = 0, short = false;
-      for (const p of params) {
-        const r = STA.setup.applyChange(p, Object.assign({ why: e.why[0] }, change));
-        if (!r.atLimit) applied++;
-        if (r.moved != null && change.steps && Math.abs(r.moved) < Math.abs(change.steps)) short = true;
+      // The wanted setting first, then other ways to get the same effect if it cannot move.
+      const tries = [{ role: e.role, axle: e.axle || null, dir }].concat(STA.advisor.equivalents(e.role, e.axle || null, dir));
+      let done = false, firstWhy = null;
+      for (const t of tries) {
+        const key = t.role + '|' + (t.axle || '');
+        if (t !== tries[0] && (touched.has(key) || net.has(key))) continue; // do not stack onto a setting the baseline already moves
+        const r = STA.advisor.resolve(setup, t.role, t.axle, t.dir, blocked);
+        if (!r.params.length) { if (!firstWhy) firstWhy = r.why; continue; }
+        const change = STA.advisor.buildChange(t.role, t.dir, r.params, t === tries[0] ? Math.abs(n) : 1);
+        const from = STA.setup.describe(r.params);
+        let applied = 0, short = false;
+        for (const p of r.params) {
+          const res = STA.setup.applyChange(p, Object.assign({ why: e.why[0] }, change));
+          if (!res.atLimit) applied++;
+          if (res.moved != null && change.steps && Math.abs(res.moved) < Math.abs(change.steps)) short = true;
+        }
+        if (!applied) { if (!firstWhy) firstWhy = STA.advisor.labelFor(t.role, t.axle) + ' (already at the end of its range)'; continue; }
+        if (short) change.text += ' (fewer steps were available)';
+        touched.add(key);
+        changes.push({ label: STA.advisor.labelFor(t.role, t.axle), from, to: STA.setup.describe(r.params), text: change.text,
+          why: why + (t === tries[0] ? '' : '. Used instead of: ' + firstWhy) });
+        done = true; break;
       }
-      if (short) change.text += ' (fewer steps were available)';
-      if (!applied) { notApplied.push({ label, why, reason: 'already at the end of its range (' + from + ')' }); continue; }
-      changes.push({ label, from, to: STA.setup.describe(params), text: change.text, why });
+      if (!done) notApplied.push({ label: STA.advisor.labelFor(e.role, e.axle), why, reason: (firstWhy || 'not adjustable on this car').replace(/^.*?\((.*)\)$/, '$1') });
     }
     STA.setup.refresh(setup);
     return { setup, changes, notApplied, track, usedHistory };

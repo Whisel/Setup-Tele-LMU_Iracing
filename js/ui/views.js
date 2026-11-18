@@ -345,9 +345,9 @@
       ]));
     }
 
-    const list = h('div', { class: 'suggestions' });
+    const list = h('div', { class: 'suggestions' }), blockedList = STA.library.blocked.list(s.meta.sim, s.meta.car);
     if (!s.setup) list.appendChild(h('p', { class: 'empty', text: adv.note }));
-    else if (!adv.suggestions.length) list.appendChild(h('p', { class: 'empty', text: an.findings.length ? 'None of the usual fixes for these findings is adjustable on this car\'s setup.' : 'No changes suggested. Keep this setup and work on the laps themselves with the comparison tools.' }));
+    else if (!adv.suggestions.length) list.appendChild(h('p', { class: 'empty', text: an.findings.length ? 'None of the usual fixes for these findings can be made on this car\'s setup. The reasons are listed below.' : 'No changes suggested. Keep this setup and work on the laps themselves with the comparison tools.' }));
     adv.suggestions.forEach((x) => {
       list.appendChild(h('article', { class: 'suggestion' }, [
         h('label', { class: 'check big' }, [h('input', { type: 'checkbox', checked: !!checked[x.key], onchange: (ev) => { checked[x.key] = ev.target.checked; } }), h('span', { class: 'rank num', text: String(x.rank) })]),
@@ -355,9 +355,12 @@
           h('h3', { text: x.title + ' by ' + x.amount }),
           h('p', { class: 'now' }, ['Now: ', h('b', { text: x.current })]),
           h('p', { text: x.effect + (x.cost ? ' Trade-off: ' + x.cost.charAt(0).toLowerCase() + x.cost.slice(1) : '') }),
+          x.insteadOf ? h('p', { class: 'instead', text: 'Chosen as the next-best route because the usual fix is unavailable: ' + x.insteadOf + '.' }) : null,
           h('p', { class: 'evidence', text: 'Addresses: ' + x.reasons.join('; ') + '.' + (x.conflict ? ' Works against: ' + x.conflict.join('; ') + '.' : '') }),
         ]),
-        confTag(x.confidence),
+        h('div', { class: 'suggestion-side' }, [confTag(x.confidence),
+          h('button', { class: 'link', type: 'button', text: 'Not possible on this car', title: 'Hide this change for this car and look for another way to get the same effect',
+            onclick: () => { STA.library.blocked.add(s.meta.sim, s.meta.car, x.blockKey); delete checked[x.key]; ui().adviceChecked = null; render(); } })]),
       ]));
     });
     const nameIn = h('input', { type: 'text', class: 'text', value: (s.setup ? s.setup.name : 'Setup') + ' – revised', 'aria-label': 'Name for the revised setup' });
@@ -365,8 +368,11 @@
       h('h2', { text: 'Suggested changes, most useful first' }),
       h('p', { class: 'lead', text: 'Change one or two things, drive three to five clean laps, then load the new telemetry and compare. The ticked items are the ones to try first.' }),
       list,
-      adv.skipped.length ? h('details', { class: 'skipped' }, [h('summary', { text: 'Fixes that would normally be tried but are not available on this car' }),
-        h('ul', {}, adv.skipped.map((k) => h('li', { text: k.finding + ': ' + k.items.join(', ') + '.' })))]) : null,
+      adv.skipped.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Left out because this car cannot do them' }),
+        h('ul', { class: 'plain' }, adv.skipped.map((k) => h('li', {}, [h('b', { text: k.finding + ': ' }), k.items.join('; ') + '.'])))]) : null,
+      blockedList.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Changes you marked as not possible on the ' + s.meta.car }),
+        h('ul', { class: 'plain' }, blockedList.map((key) => { const [role, axle, dir] = key.split('|'); return h('li', {}, [STA.advisor.titleFor(role, dir, axle || null) + ' ',
+          h('button', { class: 'link', type: 'button', text: 'Allow again', onclick: () => { STA.library.blocked.remove(s.meta.sim, s.meta.car, key); ui().adviceChecked = null; render(); } })]); }))]) : null,
       s.setup && adv.suggestions.length ? h('div', { class: 'actions' }, [nameIn, h('button', { class: 'btn', type: 'button', text: 'Save ticked changes as a new setup', onclick: async () => {
         const picked = adv.suggestions.filter((x) => checked[x.key]);
         if (!picked.length) return A().say('warn', 'Tick at least one change first.');
@@ -459,7 +465,7 @@
         profile ? [] : [h('li', { text: 'There is no telemetry for ' + b.track + ' in this sim yet, so anything left on "Decide from telemetry" uses the middle setting.' })],
         tnd.filter((t) => t.count >= 2).map((t) => h('li', { text: 'Your earlier sessions with this car keep showing: ' + t.title.toLowerCase() + ' (' + t.count + ' sessions). The baseline leans against it.' })))),
       h('div', { class: 'actions' }, [h('button', { class: 'btn', type: 'button', text: 'Build baseline for ' + b.track, onclick: () => {
-        b.result = STA.baseline.build(ref, { profile, pref: b.pref, tendencies: tnd, track: b.track, name: 'App baseline – ' + b.track });
+        b.result = STA.baseline.build(ref, { profile, pref: b.pref, tendencies: tnd, track: b.track, name: 'App baseline – ' + b.track, blocked: STA.library.blocked.set(b.sim, b.car) });
         b.result.setup.car = b.car; b.result.setup.carClass = ref.carClass; render();
       } })]),
     ]));

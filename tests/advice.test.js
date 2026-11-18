@@ -57,6 +57,65 @@ test('advice never proposes a setting the car does not have, and says so', () =>
   assert.strictEqual(STA.advisor.advise({ findings }, null).suggestions.length, 0);
 });
 
+const setupWith = (edit) => STA.setup.fromIracing(STA.yaml.parse(edit(SETUP_YAML)).CarSetup, { car: 'Test GT3', track: 'Test Ring', name: 'n' });
+// In the test setup the front bar is "ArbBlades: 3" and the rear bar "ArbBlades: 2".
+const rearBarDisconnected = (y) => y.replace('ArbBlades: 2', 'ArbBlades: Disconnected');
+
+test('a setting already at the end of its range is recognised from its value', () => {
+  const s = setupWith((y) => rearBarDisconnected(y).replace('DiffPreload: 80 Nm', 'DiffPreload: 0 Nm'));
+  const rearBar = STA.setup.byRole(s, 'arb', 'rear')[0], frontBar = STA.setup.byRole(s, 'arb', 'front')[0], preload = STA.setup.byRole(s, 'diffPreload')[0];
+  assert.strictEqual(STA.setup.limitReason(rearBar, '-'), 'already disconnected');
+  assert.strictEqual(STA.setup.limitReason(rearBar, '+'), null, 'a disconnected bar can still be stiffened');
+  assert.strictEqual(STA.setup.limitReason(frontBar, '-'), null);
+  assert.strictEqual(STA.setup.limitReason(preload, '-'), 'already at 0 Nm');
+  const camber = STA.setup.byRole(s, 'camber', 'front')[0];
+  assert.strictEqual(STA.setup.limitReason(camber, '-'), null, 'a negative value is not treated as a floor');
+});
+
+test('advice never asks to soften a disconnected bar: it gets the same balance change another way', () => {
+  const s = setupWith(rearBarDisconnected);
+  const findings = [{ id: 'os', kind: 'oversteer', phase: 'mid', band: 'low', title: 'Mid-corner oversteer', severity: 0.8, confidence: 'medium' },
+    { id: 'tr', kind: 'traction', phase: 'exit', band: 'low', title: 'Traction-limited exits', severity: 0.6, confidence: 'medium' }];
+  const adv = STA.advisor.advise({ findings }, s);
+  assert.ok(!adv.suggestions.some((x) => x.role === 'arb' && x.axle === 'rear' && x.dir === '-'), 'no softer-rear-bar suggestion');
+  const top = adv.suggestions[0];
+  assert.deepStrictEqual([top.role, top.axle, top.dir], ['arb', 'front', '+'], 'stiffening the front bar shifts roll stiffness the same way');
+  assert.match(top.insteadOf, /Rear anti-roll bar \(already disconnected\)/);
+  assert.ok(adv.skipped.some((k) => k.items.some((i) => /already disconnected/.test(i))));
+  // the proposed setup leaves the disconnected bar alone
+  const prop = STA.advisor.proposeSetup(s, adv.suggestions);
+  assert.strictEqual(STA.setup.byRole(prop, 'arb', 'rear')[0].raw, 'Disconnected');
+});
+
+test('a change the driver marks as not possible is dropped and the next route is used', () => {
+  const s = setupWith(rearBarDisconnected);
+  const findings = [{ id: 'os', kind: 'oversteer', phase: 'mid', band: 'low', title: 'Mid-corner oversteer', severity: 0.8, confidence: 'medium' }];
+  const first = STA.advisor.advise({ findings }, s).suggestions[0];
+  assert.strictEqual(first.blockKey, 'arb|front|+');
+  const adv = STA.advisor.advise({ findings }, s, { blocked: new Set([first.blockKey]) });
+  assert.ok(!adv.suggestions.some((x) => x.blockKey === first.blockKey));
+  assert.deepStrictEqual([adv.suggestions[0].role, adv.suggestions[0].axle, adv.suggestions[0].dir], ['spring', 'rear', '-'], 'softer rear springs are the next way to add rear grip');
+  assert.ok(adv.skipped[0].items.some((i) => /you marked this as not possible/.test(i)));
+  // and the remembered list round-trips per car
+  STA.library.blocked.clear();
+  STA.library.blocked.add('iracing', 'Test GT3', first.blockKey);
+  assert.ok(STA.library.blocked.set('iracing', 'test gt3').has('arb|front|+'), 'car names match regardless of case');
+  assert.strictEqual(STA.library.blocked.set('iracing', 'Other Car').size, 0);
+  STA.library.blocked.remove('iracing', 'Test GT3', first.blockKey);
+  assert.strictEqual(STA.library.blocked.list('iracing', 'Test GT3').length, 0);
+});
+
+test('baseline also routes around a setting that cannot move', () => {
+  const ref = setupWith(rearBarDisconnected);
+  const r = STA.baseline.build(ref, { profile: { wot: 0.58, tLow: 0.2, tHigh: 0.15 }, pref: { balance: 'stable' }, track: 'Test Ring' });
+  assert.ok(!r.changes.some((c) => c.label === 'Rear anti-roll bar'));
+  const alt = r.changes.find((c) => c.label === 'Front anti-roll bar');
+  assert.ok(alt, 'front bar used instead');
+  assert.strictEqual(alt.to, '4');
+  assert.match(alt.why, /Used instead of: Rear anti-roll bar \(already disconnected\)/);
+  assert.strictEqual(STA.setup.byRole(r.setup, 'arb', 'rear')[0].raw, 'Disconnected');
+});
+
 test('baseline: earlier work on the same car and track is found before anything new is proposed', async () => {
   await STA.library.open(true); await STA.library.clearAll();
   const s = await session({}, { setupName: 'my_race_v3.sto' });

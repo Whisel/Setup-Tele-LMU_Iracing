@@ -48,12 +48,12 @@
     return { session: s, lap, grid: STA.session.lapGrid(s, lap) };
   }
 
+  /* Handling analysis is cached per session; the advice is rebuilt each time because it
+     depends on what the driver has marked as not possible on this car. */
   function analysisFor(session) {
-    if (!state.analysis.has(session.id)) {
-      const an = STA.handling.analyse(session);
-      state.analysis.set(session.id, { an, adv: STA.advisor.advise(an, session.setup) });
-    }
-    return state.analysis.get(session.id);
+    if (!state.analysis.has(session.id)) state.analysis.set(session.id, STA.handling.analyse(session));
+    const an = state.analysis.get(session.id);
+    return { an, adv: STA.advisor.advise(an, session.setup, { blocked: STA.library.blocked.set(session.meta.sim, session.meta.car) }) };
   }
 
   function say(kind, text) {
