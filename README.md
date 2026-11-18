@@ -9,12 +9,25 @@ It runs entirely on your computer. Nothing is uploaded.
 
 | Tab | What you get |
 |---|---|
-| Lap comparison | Two laps (A and B) overlaid: speed, pedals, steering, gear, RPM, G forces and the running time difference, with both driven lines on a map and a corner-by-corner table. The two laps can come from different sessions at the same track. |
+| Lap comparison | Any number of laps overlaid: speed, pedals, steering, gear, RPM, G forces and each lap's running time difference to the reference lap, with every driven line on a map and a corner-by-corner table. Laps can come from different sessions at the same track. |
 | Track map | The track drawn from your own position data, with the line coloured by speed, by throttle and brake, or by where each lap gains time. |
 | Telemetry tables | Lap table, corner table, samples every 5–100 m, and tyre, brake and ride-height readings. Every table saves as CSV. |
 | Setup advice | Findings from your fastest laps (balance by corner phase and speed, traction, locking, tyres, ride height, brakes, gearing), each with a confidence level, turned into specific changes to the setup that was on the car. |
 | Baseline setup | A starting setup for a car and track. Before proposing anything it checks whether you already have a setup in progress for that car and track, and tells you to carry on from it if so. |
 | Setups and differences | Every setup the app has seen, and a side-by-side table of how any two or more differ. |
+
+## Overlaying laps
+
+Each lap in the lap list has a **+** button; press it on as many laps as you like, or use
+**Overlay all timed laps**. Every overlaid lap gets a letter and a colour that it keeps
+until you remove it. One lap is the **reference** (the **Ref** button): time differences
+and the corner table are measured against it, and you can change it at any time without
+the other laps changing colour.
+
+The first eight laps have their own colour. Laps beyond that are drawn in grey, because
+more colours than that cannot be told apart reliably; point at a lap in the bar above the
+charts to pick it out in the traces and on the map. The Telemetry tables tab shows the
+reference lap and the next overlaid lap; all laps appear in the Lap comparison tab.
 
 ## Running it
 

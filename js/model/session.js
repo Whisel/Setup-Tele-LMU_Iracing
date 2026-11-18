@@ -370,7 +370,7 @@
       for (let k = 0; k < N; k++) if (grid[k] < g.dMin || grid[k] > g.dMax) { for (const name of GRID_SCALARS) if (g[name]) g[name][k] = NaN; g.t[k] = NaN; }
     }
     s._grids.set(lap.idx, g);
-    while (s._grids.size > 14) s._grids.delete(s._grids.keys().next().value);
+    while (s._grids.size > (s._gridCap || 14)) s._grids.delete(s._grids.keys().next().value);
     return g;
   }
 

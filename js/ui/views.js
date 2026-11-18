@@ -25,31 +25,42 @@
   }
   const confTag = (c) => h('span', { class: 'conf ' + c, title: 'How much to trust this: ' + c }, [h('i', {}), c + ' confidence']);
 
-  /* ---------- shared: laps A and B on A's grid ---------- */
+  /* ---------- shared: every overlaid lap, expressed on the reference lap's grid ---------- */
 
+  /* laps[0] (= a) is the reference; b is the first other lap, used by the views that
+     compare exactly two laps. Each lap gets on(name) -> channel on the reference grid,
+     and delta -> its time difference to the reference along the lap. */
   function pair() {
-    const st = A().state, a = A().pick(st.A), b = A().pick(st.B);
-    if (!a) return null;
-    const onA = (name) => (b && b.grid[name] ? S().onGrid(a.grid, b.grid, b.grid[name]) : null);
+    const laps = A().overlayLaps();
+    if (!laps.length) return null;
+    const a = laps[0];
+    for (const l of laps) {
+      const cache = new Map();
+      l.on = (name) => {
+        if (l === a) return a.grid[name] || null;
+        if (!cache.has(name)) cache.set(name, l.grid[name] && !Array.isArray(l.grid[name]) ? S().onGrid(a.grid, l.grid, l.grid[name]) : null);
+        return cache.get(name);
+      };
+      l.delta = l === a ? null : S().deltaTime(a.grid, l.grid);
+    }
+    const b = laps[1] || null;
     const corners = a.session.corners && a.session.refLap ? a.session.corners : [];
-    return { a, b, onA, corners, delta: b ? S().deltaTime(a.grid, b.grid) : null };
+    return { a, b, laps, others: laps.slice(1), onA: (name) => (b ? b.on(name) : null), corners, delta: b ? b.delta : null };
+  }
+
+  /* Corner numbers for one lap. Corner windows are indices on the reference grid; scale them if this lap's grid differs. */
+  function statsFor(p, lap, c, prev) {
+    const k = (lap.grid.n - 1) / (p.a.grid.n - 1);
+    if (k === 1) return S().cornerStats(lap.grid, c, prev);
+    return S().cornerStats(lap.grid, Object.assign({}, c, { a: Math.round(c.a * k), b: Math.round(c.b * k) }), prev == null ? null : Math.round(prev * k));
   }
 
   function cornerRows(p) {
-    const rows = [];
-    p.corners.forEach((c, i) => {
+    return p.corners.map((c, i) => {
       const prev = i > 0 ? p.corners[i - 1].b : null;
-      const sa = S().cornerStats(p.a.grid, c, prev);
-      let sb = null;
-      if (p.b) {
-        // corner windows are indices on A's grid; scale them if B's grid has a different length
-        const k = (p.b.grid.n - 1) / (p.a.grid.n - 1);
-        const cb = Object.assign({}, c, { a: Math.round(c.a * k), b: Math.round(c.b * k) });
-        sb = S().cornerStats(p.b.grid, cb, prev == null ? null : Math.round(prev * k));
-      }
-      rows.push({ c, sa, sb });
+      const stats = p.laps.map((l) => statsFor(p, l, c, prev));
+      return { c, stats, sa: stats[0], sb: stats[1] || null };
     });
-    return rows;
   }
 
   /* ---------- Lap comparison ---------- */
@@ -63,45 +74,45 @@
     const on = ui().channels;
     const g = p.a.grid, scale = (arr, k) => { if (!arr) return null; const o = new Float32Array(arr.length); for (let i = 0; i < arr.length; i++) o[i] = arr[i] * k; return o; };
     const kS = A().state.speedUnit === 'mph' ? 2.236936 : 3.6;
-    const two = (name, k) => [{ name: 'A', colorVar: '--lap-a', data: k ? scale(g[name], k) : g[name] }].concat(p.b ? [{ name: 'B', colorVar: '--lap-b', data: k ? scale(p.onA(name), k) : p.onA(name) }] : []);
-    const panels = [];
-    if (on.speed) panels.push({ key: 'speed', label: 'Speed', unit: A().speedUnit(), dec: 1, height: 150, series: two('speed', kS) });
-    if (on.delta && p.delta) panels.push({ key: 'delta', label: 'Time difference', unit: 's, B − A (above zero: B is behind)', dec: 3, height: 84, zero: true, noDiff: true, series: [{ name: 'B − A', colorVar: '--ink-2', data: p.delta }] });
-    if (on.throttle) panels.push({ key: 'throttle', label: 'Throttle', unit: '%', dec: 0, height: 70, min: 0, max: 100, series: two('throttle', 100) });
-    if (on.brake) panels.push({ key: 'brake', label: 'Brake', unit: '%', dec: 0, height: 70, min: 0, max: 100, series: two('brake', 100) });
-    if (on.steer && g.steer) panels.push({ key: 'steer', label: 'Steering', unit: p.a.session.meta.steerUnit + ', left is positive', dec: 1, height: 84, zero: true, series: two('steer') });
-    if (on.gear && g.gear) panels.push({ key: 'gear', label: 'Gear', unit: '', dec: 0, height: 60, step: true, series: two('gear') });
-    if (on.rpm && g.rpm) panels.push({ key: 'rpm', label: 'Engine speed', unit: 'rpm', dec: 0, height: 80, series: two('rpm') });
-    if (on.latG && g.latG) panels.push({ key: 'latG', label: 'Lateral G', unit: 'g, left is positive', dec: 2, height: 80, zero: true, series: two('latG') });
-    if (on.longG && g.longG) panels.push({ key: 'longG', label: 'Longitudinal G', unit: 'g, braking is negative', dec: 2, height: 80, zero: true, series: two('longG') });
+    const all = (name, k) => p.laps.map((l) => ({ name: l.letter, colorVar: l.colorVar, muted: l.muted, data: k ? scale(l.on(name), k) : l.on(name) }));
+    const R = p.a.letter, panels = [];
+    if (on.speed) panels.push({ key: 'speed', label: 'Speed', unit: A().speedUnit(), dec: 1, height: 150, series: all('speed', kS) });
+    if (on.delta && p.others.length) panels.push({ key: 'delta', label: 'Time difference to lap ' + R, unit: 's (above zero: behind lap ' + R + ')', dec: 3, height: 84, zero: true, noDiff: true,
+      series: p.others.map((l) => ({ name: l.letter, colorVar: l.colorVar, muted: l.muted, data: l.delta })) });
+    if (on.throttle) panels.push({ key: 'throttle', label: 'Throttle', unit: '%', dec: 0, height: 70, min: 0, max: 100, series: all('throttle', 100) });
+    if (on.brake) panels.push({ key: 'brake', label: 'Brake', unit: '%', dec: 0, height: 70, min: 0, max: 100, series: all('brake', 100) });
+    if (on.steer && g.steer) panels.push({ key: 'steer', label: 'Steering', unit: p.a.session.meta.steerUnit + ', left is positive', dec: 1, height: 84, zero: true, series: all('steer') });
+    if (on.gear && g.gear) panels.push({ key: 'gear', label: 'Gear', unit: '', dec: 0, height: 60, step: true, series: all('gear') });
+    if (on.rpm && g.rpm) panels.push({ key: 'rpm', label: 'Engine speed', unit: 'rpm', dec: 0, height: 80, series: all('rpm') });
+    if (on.latG && g.latG) panels.push({ key: 'latG', label: 'Lateral G', unit: 'g, left is positive', dec: 2, height: 80, zero: true, series: all('latG') });
+    if (on.longG && g.longG) panels.push({ key: 'longG', label: 'Longitudinal G', unit: 'g, braking is negative', dec: 2, height: 80, zero: true, series: all('longG') });
     return panels;
   }
 
   function mapData(p, mode) {
-    const g = p.a.grid;
-    const lines = [{ name: 'A', colorVar: '--lap-a', x: g.x, y: g.y, width: 2 }];
-    if (p.b && p.b.grid.x && ui().mapShowB !== false) lines.push({ name: 'B', colorVar: '--lap-b', x: p.b.grid.x, y: p.b.grid.y, width: 2 });
+    const g = p.a.grid, R = p.a.letter;
     const css = STA.charts.css, legend = [];
+    const line = (l) => ({ name: l.letter, colorVar: l.colorVar, muted: l.muted, x: l.grid.x, y: l.grid.y, width: 2 });
+    let lines = [line(p.a)];
     if (mode === 'speed') {
       const dark = document.documentElement.dataset.theme === 'dark';
       const ramp = dark ? ['#104281', '#184f95', '#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'] : ['#b7d3f6', '#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#104281', '#0d366b'];
       const [lo, hi] = U.minMax(g.speed);
       lines[0].colors = Array.from(g.speed, (v) => (v === v ? ramp[Math.min(ramp.length - 1, Math.floor(((v - lo) / Math.max(1e-6, hi - lo)) * ramp.length))] : 'transparent'));
-      legend.push({ ramp, lo: A().speed(lo).toFixed(0), hi: A().speed(hi).toFixed(0) + ' ' + A().speedUnit(), label: 'Lap A speed' });
-      if (lines[1]) lines.pop();
+      legend.push({ ramp, lo: A().speed(lo).toFixed(0), hi: A().speed(hi).toFixed(0) + ' ' + A().speedUnit(), label: 'Lap ' + R + ' speed' });
     } else if (mode === 'pedals') {
       const thr = css('--thr'), brk = css('--brk'), coast = css('--muted');
       lines[0].colors = Array.from(g.throttle, (v, i) => (v !== v ? 'transparent' : g.brake[i] > 0.05 ? brk : v > 0.2 ? thr : coast));
-      legend.push({ swatches: [[thr, 'On throttle'], [brk, 'Braking'], [coast, 'Coasting']], label: 'Lap A pedals' });
-      if (lines[1]) lines.pop();
-    } else if (mode === 'gain' && p.delta) {
-      // Where each lap gains: slope of the time difference over the next 40 m.
-      const a = css('--lap-a'), b = css('--lap-b'), even = css('--muted'), w = Math.round(40 / g.step), d = p.delta;
-      lines[0].colors = Array.from(d, (v, i) => { const s = d[Math.min(d.length - 1, i + w)] - d[Math.max(0, i - w)]; return s !== s ? 'transparent' : s > 0.012 ? a : s < -0.012 ? b : even; });
-      legend.push({ swatches: [[a, 'A is gaining'], [b, 'B is gaining'], [even, 'Even']], label: 'Time gained over each stretch' });
-      if (lines[1]) lines.pop();
+      legend.push({ swatches: [[thr, 'On throttle'], [brk, 'Braking'], [coast, 'Coasting']], label: 'Lap ' + R + ' pedals' });
+    } else if (mode === 'gain' && p.b) {
+      // Where each of the two laps gains: slope of the time difference over the surrounding 80 m.
+      const ca = css(p.a.colorVar), cb = css(p.b.colorVar), even = css('--muted'), w = Math.round(40 / g.step), d = p.delta;
+      lines[0].colors = Array.from(d, (v, i) => { const sl = d[Math.min(d.length - 1, i + w)] - d[Math.max(0, i - w)]; return sl !== sl ? 'transparent' : sl > 0.012 ? ca : sl < -0.012 ? cb : even; });
+      legend.push({ swatches: [[ca, R + ' is gaining'], [cb, p.b.letter + ' is gaining'], [even, 'Even']], label: 'Time gained over each stretch, laps ' + R + ' and ' + p.b.letter });
     } else {
-      legend.push({ swatches: [[css('--lap-a'), 'Lap A']].concat(lines[1] ? [[css('--lap-b'), 'Lap B']] : []), label: 'Driven lines' });
+      lines = p.laps.filter((l) => l.grid.x).map(line);
+      const named = p.laps.filter((l) => !l.muted), grey = p.laps.length - named.length;
+      legend.push({ swatches: named.map((l) => [css(l.colorVar), 'Lap ' + l.letter]).concat(grey ? [[css('--lap-x'), grey + ' more in grey']] : []), label: 'Driven lines' });
     }
     return { lines, corners: p.corners.map((c) => ({ name: c.name, i: c.apex })), legend };
   }
@@ -116,17 +127,17 @@
 
   function renderCompare() {
     const p = pair();
-    if (!p) return view().appendChild(empty('Compare two laps', 'Load a telemetry file, then pick lap A and lap B in the lap list on the left. The traces, driven lines and a corner-by-corner table appear here.'));
-    const g = p.a.grid;
+    if (!p) return view().appendChild(empty('Compare laps', 'Load a telemetry file, then use the + buttons in the lap list on the left to overlay as many laps as you like. The traces, driven lines and a corner-by-corner table appear here.'));
+    const g = p.a.grid, R = p.a.letter;
     const mapBox = h('div', { class: 'mapbox' }), traces = h('div', { class: 'traces' });
     const on = ui().channels || (ui().channels = { speed: true, throttle: true, brake: true, steer: true, gear: false, rpm: false, latG: false, longG: false, delta: true });
     const chooser = h('div', { class: 'chooser' }, CHANNELS.filter(([key]) => key !== 'delta' || p.b).map(([key, label]) =>
       h('label', { class: 'check' }, [h('input', { type: 'checkbox', checked: !!on[key], onchange: (ev) => { on[key] = ev.target.checked; render(); } }), label])));
-    const hint = h('p', { class: 'hint', text: 'Drag across a trace to zoom, double-click to zoom back out. Scroll on the map to zoom, drag to move.' });
+    const hint = h('p', { class: 'hint', text: 'Drag across a trace to zoom, double-click to zoom back out. Scroll on the map to zoom, drag to move.' + (p.laps.length > 2 ? ' Point at a lap in the bar above to pick it out.' : '') });
     const md = g.x ? mapData(p, 'lines') : null;
     view().appendChild(h('div', { class: 'compare' }, [
       h('section', { class: 'panel map-panel' }, [h('h2', { text: 'Driven lines' }), g.x ? mapBox : h('p', { class: 'empty', text: 'This file has no position data, so there is no map.' }), md ? legendEl(md.legend) : null]),
-      h('section', { class: 'panel' }, [h('div', { class: 'panel-head' }, [h('h2', { text: 'Traces by lap distance' }), chooser]), traces, hint]),
+      h('section', { class: 'panel' }, [h('div', { class: 'panel-head' }, [h('h2', { text: p.laps.length > 1 ? p.laps.length + ' laps by lap distance' : 'Traces by lap distance' }), chooser]), traces, hint]),
     ]));
 
     let map = null;
@@ -136,32 +147,56 @@
     if (md) { map = new STA.charts.TrackMap(mapBox, { onCursor: (i) => stack.setCursor(i, false) }); live.push(map); map.setData(md); }
 
     // corner-by-corner table
-    if (p.corners.length) {
-      const rows = cornerRows(p), sp = (v) => A().speed(v).toFixed(1);
+    if (!p.corners.length) return;
+    const rows = cornerRows(p), sp = (v) => A().speed(v).toFixed(1);
+    const zoom = (c) => () => stack.setRange([Math.max(0, c.dStart - 150), Math.min(g.d[g.n - 1], c.dEnd + 120)]);
+    const base = (r) => ({ name: r.c.name, dir: r.c.dir === 'L' ? 'Left' : 'Right', at: Math.round(r.c.dApex) + ' m', _click: zoom(r.c) });
+    const brakeTxt = (st) => (st.brakeAt == null ? 'no braking' : Math.round(st.brakeAt) + ' m');
+    let cols, data, note = 'Select a row to zoom the traces to that corner.';
+    if (p.laps.length <= 2) {
+      const Bn = p.b ? p.b.letter : '';
       let worst = null;
-      const data = rows.map((r) => {
+      data = rows.map((r) => {
         const dt = r.sb ? r.sb.time - r.sa.time : null;
         if (dt != null && (worst == null || Math.abs(dt) > Math.abs(worst.dt))) worst = { dt, name: r.c.name };
-        return {
-          name: r.c.name, dir: r.c.dir === 'L' ? 'Left' : 'Right', at: Math.round(r.c.dApex) + ' m',
+        return Object.assign(base(r), {
           aMin: sp(r.sa.min), bMin: r.sb ? sp(r.sb.min) : '', dMin: r.sb ? U.fmtDelta(A().speed(r.sb.min - r.sa.min), 1) : '',
-          aBrake: r.sa.brakeAt == null ? 'no braking' : Math.round(r.sa.brakeAt) + ' m', bBrake: r.sb ? (r.sb.brakeAt == null ? 'no braking' : Math.round(r.sb.brakeAt) + ' m') : '',
+          aBrake: brakeTxt(r.sa), bBrake: r.sb ? brakeTxt(r.sb) : '',
           dBrake: r.sb && r.sa.brakeAt != null && r.sb.brakeAt != null ? U.fmtDelta(r.sb.brakeAt - r.sa.brakeAt, 0) + ' m' : '',
-          aT: r.sa.time.toFixed(3), bT: r.sb ? r.sb.time.toFixed(3) : '', dT: dt == null ? '' : U.fmtDelta(dt), _dt: dt,
-          _click: () => stack.setRange([Math.max(0, r.c.dStart - 150), Math.min(g.d[g.n - 1], r.c.dEnd + 120)]),
-        };
+          aT: r.sa.time.toFixed(3), bT: r.sb ? r.sb.time.toFixed(3) : '', dT: dt == null ? '' : U.fmtDelta(dt),
+        });
       });
-      data.forEach((d) => { if (worst && d.name === worst.name && Math.abs(worst.dt) >= 0.02) d._cls = 'mark'; });
-      const cols = [{ key: 'name', label: 'Corner' }, { key: 'dir', label: 'Turn' }, { key: 'at', label: 'Apex at', num: true },
-        { key: 'aMin', label: 'A min ' + A().speedUnit(), num: true }].concat(p.b ? [{ key: 'bMin', label: 'B min', num: true }, { key: 'dMin', label: 'B − A', num: true }] : [],
-        [{ key: 'aBrake', label: 'A brakes at', num: true }], p.b ? [{ key: 'bBrake', label: 'B brakes at', num: true }, { key: 'dBrake', label: 'B − A', num: true, title: 'Positive: B brakes later' }] : [],
-        [{ key: 'aT', label: 'A time in corner', num: true }], p.b ? [{ key: 'bT', label: 'B time', num: true }, { key: 'dT', label: 'B − A s', num: true }] : []);
-      view().appendChild(h('section', { class: 'panel' }, [
-        h('div', { class: 'panel-head' }, [h('h2', { text: 'Corner by corner' }), h('span', { class: 'h-note', text: worst && p.b && Math.abs(worst.dt) >= 0.02 ? 'Biggest difference: ' + worst.name + ' (' + U.fmtDelta(worst.dt) + ' s). Select a row to zoom the traces to that corner.' : 'Select a row to zoom the traces to that corner.' })]),
-        table(cols, data),
-        h('p', { class: 'hint', text: 'Corners are found from the lateral load on lap A\'s session and numbered in driving order (C1, C2 …). They will not always match the circuit\'s official turn numbers.' }),
-      ]));
+      const big = worst && p.b && Math.abs(worst.dt) >= 0.02;
+      data.forEach((d) => { if (big && d.name === worst.name) d._cls = 'mark'; });
+      if (big) note = 'Biggest difference: ' + worst.name + ' (' + U.fmtDelta(worst.dt) + ' s). ' + note;
+      cols = [{ key: 'name', label: 'Corner' }, { key: 'dir', label: 'Turn' }, { key: 'at', label: 'Apex at', num: true },
+        { key: 'aMin', label: R + ' min ' + A().speedUnit(), num: true }].concat(p.b ? [{ key: 'bMin', label: Bn + ' min', num: true }, { key: 'dMin', label: Bn + ' − ' + R, num: true }] : [],
+        [{ key: 'aBrake', label: R + ' brakes at', num: true }], p.b ? [{ key: 'bBrake', label: Bn + ' brakes at', num: true }, { key: 'dBrake', label: Bn + ' − ' + R, num: true, title: 'Positive: ' + Bn + ' brakes later' }] : [],
+        [{ key: 'aT', label: R + ' time in corner', num: true }], p.b ? [{ key: 'bT', label: Bn + ' time', num: true }, { key: 'dT', label: Bn + ' − ' + R + ' s', num: true }] : []);
+    } else {
+      // Many laps: the reference lap's numbers, each other lap's time against it, and which lap was quickest.
+      let widest = null;
+      data = rows.map((r) => {
+        const times = r.stats.map((st) => st.time);
+        let qi = 0; times.forEach((t, k) => { if (t < times[qi]) qi = k; });
+        const spread = Math.max(...times) - Math.min(...times);
+        if (widest == null || spread > widest.spread) widest = { spread, name: r.c.name };
+        const o = Object.assign(base(r), { aMin: sp(r.sa.min), aBrake: brakeTxt(r.sa), aT: r.sa.time.toFixed(3), quick: p.laps[qi].letter + ' (' + sp(r.stats[qi].min) + ')', spread: spread.toFixed(3), _cell: {} });
+        p.others.forEach((l, k) => { o['d' + k] = U.fmtDelta(r.stats[k + 1].time - r.sa.time); });
+        return o;
+      });
+      data.forEach((d) => { if (widest && d.name === widest.name && widest.spread >= 0.02) d._cls = 'mark'; });
+      if (widest && widest.spread >= 0.02) note = 'Widest spread between laps: ' + widest.name + ' (' + widest.spread.toFixed(3) + ' s). ' + note;
+      cols = [{ key: 'name', label: 'Corner' }, { key: 'dir', label: 'Turn' }, { key: 'at', label: 'Apex at', num: true }, { key: 'aMin', label: R + ' min ' + A().speedUnit(), num: true },
+        { key: 'aBrake', label: R + ' brakes at', num: true }, { key: 'aT', label: R + ' time in corner', num: true }]
+        .concat(p.others.map((l, k) => ({ key: 'd' + k, label: l.letter + ' − ' + R + ' s', num: true })),
+          [{ key: 'quick', label: 'Quickest lap (min ' + A().speedUnit() + ')' }, { key: 'spread', label: 'Spread s', num: true }]);
     }
+    view().appendChild(h('section', { class: 'panel' }, [
+      h('div', { class: 'panel-head' }, [h('h2', { text: 'Corner by corner' }), h('span', { class: 'h-note', text: note })]),
+      table(cols, data),
+      h('p', { class: 'hint', text: 'Corners are found from the lateral load on the reference lap\'s session and numbered in driving order (C1, C2 …). They will not always match the circuit\'s official turn numbers.' }),
+    ]));
   }
 
   /* ---------- Track map ---------- */
@@ -169,13 +204,14 @@
   function renderMap() {
     const p = pair();
     if (!p) return view().appendChild(empty('Track map', 'Load a telemetry file to see the track and the line you drove.'));
-    const g = p.a.grid;
+    const g = p.a.grid, R = p.a.letter;
     if (!g.x) return view().appendChild(empty('No position data', 'This file does not contain position data, so a track map cannot be drawn.'));
     const mode = ui().mapMode || 'speed';
     const mapBox = h('div', { class: 'mapbox big' }), readout = h('div', { class: 'readout' });
-    const md = mapData(p, mode === 'gain' && !p.delta ? 'lines' : mode);
-    const modes = [['speed', 'Speed on lap A'], ['pedals', 'Throttle and brake on lap A'], ['gain', 'Where each lap gains time'], ['lines', 'Both driven lines']];
-    const sel = h('select', { onchange: (ev) => { ui().mapMode = ev.target.value; render(); } }, modes.map(([v, t]) => h('option', { value: v, selected: v === mode, disabled: v === 'gain' && !p.delta, text: t })));
+    const md = mapData(p, mode === 'gain' && !p.b ? 'lines' : mode);
+    const modes = [['speed', 'Speed on lap ' + R], ['pedals', 'Throttle and brake on lap ' + R], ['gain', p.b ? 'Where laps ' + R + ' and ' + p.b.letter + ' gain time' : 'Where each lap gains time'],
+      ['lines', p.laps.length > 2 ? 'All ' + p.laps.length + ' driven lines' : 'Driven lines']];
+    const sel = h('select', { onchange: (ev) => { ui().mapMode = ev.target.value; render(); } }, modes.map(([v, t]) => h('option', { value: v, selected: v === mode, disabled: v === 'gain' && !p.b, text: t })));
     let map = null;
     view().appendChild(h('section', { class: 'panel map-full' }, [
       h('div', { class: 'panel-head' }, [h('h2', { text: p.a.session.trackName }),
@@ -183,20 +219,21 @@
       h('div', { class: 'map-split' }, [mapBox, h('div', { class: 'map-side' }, [legendEl(md.legend), readout,
         h('p', { class: 'hint', text: 'Scroll to zoom, drag to move, double-click to fit. Move over the line to read the values at that point.' })])]),
     ]));
+    const cols = p.laps.slice(0, 6); // the readout stays readable up to six laps
     const showAt = (i) => {
       if (i < 0) { readout.innerHTML = '<p class="empty">Move over the line to read values.</p>'; return; }
       const c = p.corners.find((c) => i >= c.a && i <= c.b);
-      const row = (label, a, b) => '<tr><th>' + label + '</th><td class="num">' + a + '</td>' + (p.b ? '<td class="num">' + (b == null ? '' : b) + '</td>' : '') + '</tr>';
-      const B = (name) => { const arr = p.onA(name); return arr ? arr[i] : NaN; };
-      let html = '<table class="data kv"><thead><tr><th>' + Math.round(g.d[i]) + ' m' + (c ? ', ' + c.name : '') + '</th><th class="num">A</th>' + (p.b ? '<th class="num">B</th>' : '') + '</tr></thead><tbody>';
-      html += row('Speed, ' + A().speedUnit(), U.fmt(A().speed(g.speed[i]), 1), U.fmt(A().speed(B('speed')), 1));
-      html += row('Throttle, %', U.fmt(g.throttle[i] * 100, 0), U.fmt(B('throttle') * 100, 0));
-      html += row('Brake, %', U.fmt(g.brake[i] * 100, 0), U.fmt(B('brake') * 100, 0));
-      if (g.gear) html += row('Gear', U.fmt(g.gear[i], 0), U.fmt(B('gear'), 0));
-      if (g.latG) html += row('Lateral G', U.fmt(g.latG[i], 2), U.fmt(B('latG'), 2));
-      html += row('Lap time so far, s', U.fmt(g.t[i], 3), p.delta ? U.fmt(g.t[i] + p.delta[i], 3) : null);
-      if (p.delta) html += '<tr><th>B − A, s</th><td class="num" colspan="2">' + U.fmtDelta(p.delta[i]) + '</td></tr>';
-      readout.innerHTML = html + '</tbody></table>';
+      const row = (label, f) => '<tr><th>' + label + '</th>' + cols.map((l) => '<td class="num">' + f(l) + '</td>').join('') + '</tr>';
+      const at = (l, name) => { const arr = l.on(name); return arr ? arr[i] : NaN; };
+      let html = '<table class="data kv"><thead><tr><th>' + Math.round(g.d[i]) + ' m' + (c ? ', ' + c.name : '') + '</th>' + cols.map((l) => '<th class="num"><i class="sw" style="background:var(' + l.colorVar + ')"></i>' + l.letter + '</th>').join('') + '</tr></thead><tbody>';
+      html += row('Speed, ' + A().speedUnit(), (l) => U.fmt(A().speed(at(l, 'speed')), 1));
+      html += row('Throttle, %', (l) => U.fmt(at(l, 'throttle') * 100, 0));
+      html += row('Brake, %', (l) => U.fmt(at(l, 'brake') * 100, 0));
+      if (g.gear) html += row('Gear', (l) => U.fmt(at(l, 'gear'), 0));
+      if (g.latG) html += row('Lateral G', (l) => U.fmt(at(l, 'latG'), 2));
+      html += row('Lap time so far, s', (l) => U.fmt(g.t[i] + (l.delta ? l.delta[i] : 0), 3));
+      if (p.b) html += row('Gap to lap ' + R + ', s', (l) => (l.delta ? U.fmtDelta(l.delta[i]) : ''));
+      readout.innerHTML = html + '</tbody></table>' + (p.laps.length > cols.length ? '<p class="hint">Showing the first ' + cols.length + ' of ' + p.laps.length + ' laps.</p>' : '');
     };
     map = new STA.charts.TrackMap(mapBox, { onCursor: showAt }); live.push(map);
     map.setData(md); showAt(-1);
@@ -249,11 +286,11 @@
       });
       note = s.meta.sim === 'iracing' ? 'iRacing does not write sector times to the telemetry file, so the sector columns are empty for iRacing sessions.' : '';
     } else if (which === 'corners') {
-      if (!p || !p.corners.length) note = 'Corners need at least one complete lap in lap A\'s session.';
+      if (!p || !p.corners.length) note = 'Corners need at least one complete lap in the reference lap\'s session.';
       else {
-        const add = (k, label) => [{ key: 'a' + k, label: 'A ' + label, num: true }].concat(p.b ? [{ key: 'b' + k, label: 'B ' + label, num: true }] : []);
+        const add = (k, label) => [{ key: 'a' + k, label: p.a.letter + ' ' + label, num: true }].concat(p.b ? [{ key: 'b' + k, label: p.b.letter + ' ' + label, num: true }] : []);
         cols = [{ key: 'name', label: 'Corner' }, { key: 'dir', label: 'Turn' }, { key: 'band', label: 'Type' }, { key: 'from', label: 'From m', num: true }, { key: 'to', label: 'To m', num: true }]
-          .concat(add('In', 'entry ' + A().speedUnit()), add('Min', 'min'), add('Out', 'exit'), add('G', 'peak g'), add('Brk', 'brake point m'), add('Thr', 'full throttle at m'), add('T', 'time s'), p.b ? [{ key: 'dT', label: 'B − A s', num: true }] : []);
+          .concat(add('In', 'entry ' + A().speedUnit()), add('Min', 'min'), add('Out', 'exit'), add('G', 'peak g'), add('Brk', 'brake point m'), add('Thr', 'full throttle at m'), add('T', 'time s'), p.b ? [{ key: 'dT', label: p.b.letter + ' − ' + p.a.letter + ' s', num: true }] : []);
         rows = cornerRows(p).map((r) => {
           const o = { name: r.c.name, dir: r.c.dir === 'L' ? 'Left' : 'Right', band: r.c.band === 'low' ? 'slow' : r.c.band === 'high' ? 'fast' : 'medium', from: Math.round(r.c.dStart), to: Math.round(r.c.dEnd) };
           for (const [k, st] of [['a', r.sa], ['b', r.sb]]) {
@@ -266,15 +303,16 @@
         });
       }
     } else if (which === 'samples') {
-      if (!p) note = 'Pick lap A to list its samples.';
+      if (!p) note = 'Add a lap to the overlay to list its samples.';
       else {
         const stepM = ui().sampleStep || 25, g = p.a.grid, every = Math.max(1, Math.round(stepM / g.step));
         extra = h('label', { class: 'mini' }, ['One row every ', h('select', { onchange: (ev) => { ui().sampleStep = +ev.target.value; render(); } }, [5, 10, 25, 50, 100].map((v) => h('option', { value: v, selected: v === stepM, text: v + ' m' })))]);
         const chans = [['speed', 'Speed ' + A().speedUnit(), (v) => sp(v)], ['throttle', 'Throttle %', (v) => U.fmt(v * 100, 0)], ['brake', 'Brake %', (v) => U.fmt(v * 100, 0)],
           ['steer', 'Steering', (v) => U.fmt(v, 1)], ['gear', 'Gear', (v) => U.fmt(v, 0)], ['rpm', 'RPM', (v) => U.fmt(v, 0)], ['latG', 'Lat g', (v) => U.fmt(v, 2)], ['longG', 'Long g', (v) => U.fmt(v, 2)]].filter((c) => g[c[0]]);
-        cols = [{ key: 'd', label: 'Distance m', num: true }, { key: 'c', label: 'Corner' }, { key: 'ta', label: 'A time s', num: true }];
-        for (const c of chans) cols.push({ key: 'a' + c[0], label: 'A ' + c[1], num: true });
-        if (p.b) { cols.push({ key: 'dt', label: 'B − A s', num: true }); for (const c of chans) cols.push({ key: 'b' + c[0], label: 'B ' + c[1], num: true }); }
+        const LA = p.a.letter, LB = p.b ? p.b.letter : '';
+        cols = [{ key: 'd', label: 'Distance m', num: true }, { key: 'c', label: 'Corner' }, { key: 'ta', label: LA + ' time s', num: true }];
+        for (const c of chans) cols.push({ key: 'a' + c[0], label: LA + ' ' + c[1], num: true });
+        if (p.b) { cols.push({ key: 'dt', label: LB + ' − ' + LA + ' s', num: true }); for (const c of chans) cols.push({ key: 'b' + c[0], label: LB + ' ' + c[1], num: true }); }
         const bArr = {}; if (p.b) for (const c of chans) bArr[c[0]] = p.onA(c[0]);
         for (let i = 0; i < g.n; i += every) {
           const cn = p.corners.find((c) => i >= c.a && i <= c.b);
@@ -308,6 +346,7 @@
       ]),
       rows.length ? table(cols, rows, { tall: true }) : null,
       note ? h('p', { class: 'hint', text: note }) : null,
+      p && p.laps.length > 2 && (which === 'corners' || which === 'samples') ? h('p', { class: 'hint', text: 'This table shows the reference lap ' + p.a.letter + ' and lap ' + p.b.letter + '. The other ' + (p.laps.length - 2) + ' overlaid laps are in the Lap comparison traces and its corner table.' }) : null,
     ]));
   }
 
@@ -522,10 +561,10 @@
       ]),
     }));
 
-    const lapSetups = (() => { const a = A().pick(st.A), b = A().pick(st.B); return a && b && a.session.setup && b.session.setup && a.session.setup.id !== b.session.setup.id ? [a.session.setup.id, b.session.setup.id] : null; })();
+    const lapSetups = (() => { const idsOf = Array.from(new Set(A().overlayLaps().filter((l) => l.session.setup).map((l) => l.session.setup.id))); return idsOf.length >= 2 ? idsOf : null; })();
     view().appendChild(h('section', { class: 'panel' }, [
       h('div', { class: 'panel-head' }, [h('h2', { text: 'Setup library' }), h('div', { class: 'tools' }, [
-        lapSetups ? h('button', { class: 'btn ghost', type: 'button', text: 'Compare the setups of lap A and lap B', onclick: () => { ui().diffIds = lapSetups; render(); } }) : null,
+        lapSetups ? h('button', { class: 'btn ghost', type: 'button', text: 'Compare the ' + lapSetups.length + ' setups of the overlaid laps', onclick: () => { ui().diffIds = lapSetups; render(); } }) : null,
         h('button', { class: 'btn ghost', type: 'button', text: 'Export library', onclick: async () => download('setup-library.json', JSON.stringify(await STA.library.exportAll(), null, 1), 'application/json') }),
         h('button', { class: 'btn ghost', type: 'button', text: 'Import library', onclick: () => impIn.click() }), impIn,
       ])]),
@@ -585,5 +624,8 @@
     ({ compare: renderCompare, map: renderMap, tables: renderTables, advice: renderAdvice, baseline: renderBaseline, setups: renderSetups }[tab] || renderCompare)();
   }
 
-  STA.views = { render };
+  /* Pick one overlaid lap out in whatever charts are on screen (null clears it). */
+  function highlight(letter) { for (const c of live) if (c.setHighlight) c.setHighlight(letter); }
+
+  STA.views = { render, highlight };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -86,6 +86,9 @@
     c.addEventListener('dblclick', () => self.setRange(null));
   };
 
+  /* Pick one series out by name (or null to clear): drawn on top, thicker, the others faded. */
+  TraceStack.prototype.setHighlight = function (name) { if (name === this.highlightName) return; this.highlightName = name; this.draw(); };
+
   TraceStack.prototype.setRange = function (r) { this.range = r; this.draw(); if (this.opts.onRange) this.opts.onRange(r); };
 
   TraceStack.prototype.setCursor = function (i, fromUser) {
@@ -99,7 +102,7 @@
     const W = this.el.clientWidth; if (W < 50) return;
     const [x0, x1] = this.xRange(), x = this.x, n = x.length;
     const i0 = Math.max(0, Math.floor(((x0 - x[0]) / (x[n - 1] - x[0])) * (n - 1))), i1 = Math.min(n - 1, Math.ceil(((x1 - x[0]) / (x[n - 1] - x[0])) * (n - 1)));
-    const ink2 = css('--ink-2'), muted = css('--muted'), grid = css('--grid'), axis = css('--axis'), surface = css('--surface');
+    const ink = css('--ink'), ink2 = css('--ink-2'), muted = css('--muted'), grid = css('--grid'), axis = css('--axis'), surface = css('--surface');
     const fmtX = (v) => (x[n - 1] - x[0] > 3000 ? (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + ' km' : Math.round(v) + ' m');
 
     for (const p of this.panels) {
@@ -156,9 +159,14 @@
       // series (later series drawn first so the first one sits on top)
       ctx.save(); ctx.beginPath(); ctx.rect(padL, padT - 2, pw, ph + 4); ctx.clip();
       const stride = Math.max(1, Math.floor((i1 - i0) / (pw * 2)));
-      for (let si = p.series.length - 1; si >= 0; si--) {
-        const s = p.series[si]; if (!s.data) continue;
-        ctx.strokeStyle = css(s.colorVar); ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.beginPath();
+      // Draw order, back to front: grey overflow laps, coloured laps (first series on top), then the highlighted lap.
+      const hl = this.highlightName;
+      const order = p.series.map((s, k) => ({ s, k })).sort((a, b) => ((a.s.name === hl ? 2 : a.s.muted ? 0 : 1) - (b.s.name === hl ? 2 : b.s.muted ? 0 : 1)) || b.k - a.k);
+      for (const { s } of order) {
+        if (!s.data) continue;
+        const isHl = s.name === hl;
+        ctx.strokeStyle = isHl && s.muted ? ink : css(s.colorVar); ctx.lineWidth = isHl ? 3 : s.muted ? 1.25 : 2; ctx.lineJoin = 'round';
+        ctx.globalAlpha = hl && !isHl ? 0.35 : 1; ctx.beginPath();
         let pen = false, py = 0;
         for (let i = i0; i <= i1; i += stride) {
           const v = s.data[i];
@@ -169,6 +177,7 @@
         }
         ctx.stroke();
       }
+      ctx.globalAlpha = 1;
       // drag-to-zoom band
       if (this.drag) {
         const a = X(Math.min(this.drag.x0, this.drag.x1)), b = X(Math.max(this.drag.x0, this.drag.x1));
@@ -180,24 +189,27 @@
         const xx = Math.round(X(x[ci])) + 0.5;
         ctx.strokeStyle = ink2; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(xx, padT); ctx.lineTo(xx, padT + ph); ctx.stroke();
         for (const s of p.series) {
-          if (!s.data || s.data[ci] !== s.data[ci]) continue;
-          ctx.fillStyle = css(s.colorVar); ctx.strokeStyle = surface; ctx.lineWidth = 2;
+          if (!s.data || s.data[ci] !== s.data[ci] || (s.muted && s.name !== hl)) continue;
+          ctx.fillStyle = s.muted ? ink : css(s.colorVar); ctx.strokeStyle = surface; ctx.lineWidth = 2;
           ctx.beginPath(); ctx.arc(xx, Y(s.data[ci]), 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         }
       }
       ctx.restore();
 
-      // live readout in the panel header (doubles as the legend)
+      // Live readout in the panel header. With up to six laps every value is shown; with more,
+      // only the first (reference) lap and the highlighted one, since the lap bar is the full legend.
       const dec = p.dec == null ? 1 : p.dec;
+      const shown = p.series.length <= 6 ? p.series : p.series.filter((s, k) => k === 0 || s.name === hl);
       let html = '';
-      p.series.forEach((s) => {
+      shown.forEach((s) => {
         if (!s.data) return;
         const v = ci >= 0 ? s.data[ci] : null;
         html += '<span class="rv"><i class="sw" style="background:var(' + s.colorVar + ')"></i>' + U.esc(s.name) + (v != null && v === v ? ' <b>' + v.toFixed(dec).replace('-', '−') + '</b>' : '') + '</span>';
       });
+      if (shown.length < p.series.length) html += '<span class="rv diff">+' + (p.series.length - shown.length) + ' more laps</span>';
       if (ci >= 0 && p.series.length === 2 && p.series[0].data && p.series[1].data && !p.noDiff) {
         const d = p.series[1].data[ci] - p.series[0].data[ci];
-        if (d === d) html += '<span class="rv diff">B − A <b>' + U.fmtDelta(d, dec) + '</b></span>';
+        if (d === d) html += '<span class="rv diff">' + U.esc(p.series[1].name) + ' − ' + U.esc(p.series[0].name) + ' <b>' + U.fmtDelta(d, dec) + '</b></span>';
       }
       p.vals.innerHTML = html;
     }
@@ -249,6 +261,7 @@
   TrackMap.prototype.sx = function (x) { return this.view.ox + x * this.view.s; };
   TrackMap.prototype.sy = function (y) { return this.view.oy - y * this.view.s; };
   TrackMap.prototype.resetView = function () { this.view = null; this.draw(); };
+  TrackMap.prototype.setHighlight = function (name) { if (name === this.highlightName) return; this.highlightName = name; this.draw(); };
 
   /* data = { lines: [{ name, colorVar, x, y, colors? }], corners: [{ name, i }], marks: [{ i, label }] }
      The first line is the one the cursor follows and the one that can be coloured per point. */
@@ -289,9 +302,12 @@
     ctx.strokeStyle = css('--track'); ctx.lineWidth = Math.max(9, 13 * v.s);
     this.path(ctx, base, 0, base.x.length - 1); ctx.stroke();
 
-    for (let li = this.data.lines.length - 1; li >= 0; li--) {
-      const L = this.data.lines[li];
-      ctx.lineWidth = L.width || 2;
+    const hl = this.highlightName;
+    const order = this.data.lines.map((L, k) => ({ L, k })).sort((a, b) => ((a.L.name === hl ? 2 : a.L.muted ? 0 : 1) - (b.L.name === hl ? 2 : b.L.muted ? 0 : 1)) || b.k - a.k);
+    for (const { L } of order) {
+      const isHl = L.name === hl;
+      ctx.lineWidth = isHl ? 3.5 : L.muted ? 1.25 : (L.width || 2);
+      ctx.globalAlpha = hl && !isHl ? 0.35 : 1;
       if (L.colors) {
         let start = 0;
         for (let i = 1; i <= L.x.length; i++) {
@@ -301,8 +317,9 @@
             start = i;
           }
         }
-      } else { ctx.strokeStyle = css(L.colorVar); this.path(ctx, L, 0, L.x.length - 1); ctx.stroke(); }
+      } else { ctx.strokeStyle = isHl && L.muted ? ink : css(L.colorVar); this.path(ctx, L, 0, L.x.length - 1); ctx.stroke(); }
     }
+    ctx.globalAlpha = 1;
 
     // start/finish and corner labels, pushed outward from the middle of the track
     ctx.font = '600 11px ' + css('--font-num'); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -332,8 +349,8 @@
     if (this.cursor >= 0) {
       for (let li = this.data.lines.length - 1; li >= 0; li--) {
         const L = this.data.lines[li], i = Math.min(L.x.length - 1, Math.round((this.cursor / Math.max(1, base.x.length - 1)) * (L.x.length - 1)));
-        if (L.x[i] !== L.x[i]) continue;
-        ctx.fillStyle = css(L.colorVar); ctx.strokeStyle = surface; ctx.lineWidth = 2;
+        if (L.x[i] !== L.x[i] || (L.muted && L.name !== hl)) continue;
+        ctx.fillStyle = L.muted ? ink : css(L.colorVar); ctx.strokeStyle = surface; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.arc(this.sx(L.x[i]), this.sy(L.y[i]), 5.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       }
     }

@@ -213,6 +213,34 @@ test('baseline leans against a balance problem that keeps recurring with this ca
   assert.strictEqual(r.changes[0].to, '2');
 });
 
+test('several setups for one car and track are kept apart, each with its own sessions and best lap', async () => {
+  await STA.library.open(true); await STA.library.clearAll();
+  const v2 = SETUP_YAML.replace('ArbBlades: 3', 'ArbBlades: 2').replace('RearWingSetting: 5', 'RearWingSetting: 6');
+  const load = async (opts, extra) => STA.session.fromIbt(await STA.ibt.read(makeIbt(sim.drive(opts), extra), { want: STA.session.IBT_WANT }), { name: extra.file });
+  // three runs: two on race_v1 (the second one later and quicker), one on race_v2
+  const runs = [
+    await load({ laps: 3 }, { file: 'a.ibt', setupName: 'race_v1.sto', startDate: 1767225600 }),
+    await load({ laps: 3 }, { file: 'b.ibt', setupName: 'race_v2.sto', setupYaml: v2, startDate: 1767229200 }),
+    await load({ laps: 3, grips: [1.03, 1.03, 1.03, 1.03] }, { file: 'c.ibt', setupName: 'race_v1.sto', startDate: 1767232800 }),
+  ];
+  assert.strictEqual(runs[0].setup.id, runs[2].setup.id, 'the same values on the same car and track are one setup');
+  assert.notStrictEqual(runs[0].setup.id, runs[1].setup.id);
+  for (const r of runs) await STA.library.recordUse(r.setup, STA.session.summaryOf(r));
+
+  const all = await STA.library.setups();
+  assert.strictEqual(all.length, 2);
+  const v1 = all.find((x) => x.name === 'race_v1'), second = all.find((x) => x.name === 'race_v2');
+  assert.strictEqual(v1.usage.sessions.length, 2);
+  assert.strictEqual(second.usage.sessions.length, 1);
+  assert.ok(Math.abs(v1.usage.bestLap - Math.min(runs[0].bestLap.time, runs[2].bestLap.time)) < 1e-9, 'best lap is the best across both runs on that setup');
+  assert.ok(v1.usage.bestLap < second.usage.bestLap);
+
+  // both are offered as earlier work, most recently driven first, and they can be compared
+  const prev = STA.baseline.findPrevious(all, { sim: 'iracing', car: 'Test GT3', track: runs[0].trackName });
+  assert.deepStrictEqual(prev.sameCombo.map((x) => x.name), ['race_v1', 'race_v2']);
+  assert.deepStrictEqual(STA.setup.diff(v1, second).filter((r) => r.changed).map((r) => r.label).sort(), ['ARB blades', 'Rear wing setting']);
+});
+
 test('library: remembers setups and usage, exports and re-imports', async () => {
   await STA.library.open(true); await STA.library.clearAll();
   const a = STA.setup.fromIracing(STA.yaml.parse(SETUP_YAML).CarSetup, { car: 'Test GT3', track: 'Test Ring', name: 'a' });

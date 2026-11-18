@@ -11,10 +11,48 @@
     ['advice', 'Setup advice'], ['baseline', 'Baseline setup'], ['setups', 'Setups and differences'],
   ];
 
+  /* Laps being overlaid: any number, from any loaded session.
+       overlay  = [{ sid, lap, slot }]   slot gives the lap its letter and colour and never changes while it is selected
+       refSlot  = slot of the reference lap, the one every time difference is measured against */
   const state = {
-    sessions: [], activeId: null, A: null, B: null, tab: 'compare',
+    sessions: [], activeId: null, overlay: [], refSlot: null, tab: 'compare',
     speedUnit: 'kmh', setups: [], summaries: [], analysis: new Map(), messages: [], ui: {},
   };
+  const SLOT_COLOURS = 8; // distinct colours available; laps beyond that are drawn in a neutral grey
+  const letterOf = (slot) => (slot < 26 ? String.fromCharCode(65 + slot) : 'L' + (slot + 1));
+  const colourVarOf = (slot) => (slot < SLOT_COLOURS ? '--lap-' + slot : '--lap-x');
+  const refEntry = () => state.overlay.find((e) => e.slot === state.refSlot) || state.overlay[0] || null;
+  const findEntry = (sid, lap) => state.overlay.find((e) => e.sid === sid && e.lap === lap) || null;
+  // The reference lap and the first other lap are still available as A and B for the views that compare exactly two laps.
+  Object.defineProperty(state, 'A', { get: () => refEntry() });
+  Object.defineProperty(state, 'B', { get: () => { const r = refEntry(); return state.overlay.find((e) => e !== r) || null; } });
+
+  function addLap(sid, lap) {
+    if (findEntry(sid, lap)) return;
+    const used = new Set(state.overlay.map((e) => e.slot));
+    let slot = 0; while (used.has(slot)) slot++;
+    state.overlay.push({ sid, lap, slot });
+    if (!refEntry() || state.refSlot == null) state.refSlot = state.overlay[0].slot;
+  }
+  function removeLap(sid, lap) {
+    state.overlay = state.overlay.filter((e) => !(e.sid === sid && e.lap === lap));
+    if (!state.overlay.some((e) => e.slot === state.refSlot)) state.refSlot = state.overlay.length ? state.overlay[0].slot : null;
+  }
+  function setRef(sid, lap) { addLap(sid, lap); state.refSlot = findEntry(sid, lap).slot; }
+  function clearLaps() { state.overlay = []; state.refSlot = null; }
+
+  /* Every overlaid lap, resolved, reference first. Keeps enough distance grids cached for all of them. */
+  function overlayLaps() {
+    const perSession = new Map();
+    for (const e of state.overlay) perSession.set(e.sid, (perSession.get(e.sid) || 0) + 1);
+    const ref = refEntry(), out = [];
+    for (const e of state.overlay) {
+      const s = sessionById(e.sid); if (!s || !s.laps[e.lap]) continue;
+      s._gridCap = Math.max(14, perSession.get(e.sid) + 6);
+      out.push({ session: s, lap: s.laps[e.lap], grid: STA.session.lapGrid(s, s.laps[e.lap]), slot: e.slot, letter: letterOf(e.slot), colorVar: colourVarOf(e.slot), isRef: e === ref, muted: e.slot >= SLOT_COLOURS });
+    }
+    return out.sort((x, y) => (y.isRef ? 1 : 0) - (x.isRef ? 1 : 0));
+  }
 
   /* ---------- small helpers shared with views.js ---------- */
 
@@ -158,14 +196,15 @@
   function activate(id, resetLaps) {
     state.activeId = id;
     const s = sessionById(id); if (!s) return;
-    // Switching session keeps laps A and B, so a lap from one session can be compared with a lap from another.
+    // Switching session keeps the overlaid laps, so laps from different sessions can be compared.
     if (resetLaps || !pick(state.A)) {
       const timed = s.laps.filter((l) => l.complete && l.valid).sort((a, b) => a.time - b.time);
       const any = s.laps.filter((l) => l.complete);
       const first = timed[0] || any[0] || s.laps[0];
-      state.A = first ? { sid: id, lap: first.idx } : null;
       const second = timed[1] || any.find((l) => l !== first) || null;
-      state.B = second ? { sid: id, lap: second.idx } : null;
+      clearLaps();
+      if (first) addLap(id, first.idx);
+      if (second) addLap(id, second.idx);
     }
   }
 
@@ -245,8 +284,7 @@
         h('button', { class: 'x', type: 'button', 'aria-label': 'Close this session', title: 'Close this session', text: '×', onclick: (ev) => {
           ev.stopPropagation();
           state.sessions = state.sessions.filter((x) => x.id !== s.id);
-          if (state.A && state.A.sid === s.id) state.A = null;
-          if (state.B && state.B.sid === s.id) state.B = null;
+          for (const e of state.overlay.filter((e) => e.sid === s.id)) removeLap(e.sid, e.lap);
           if (state.activeId === s.id) { state.activeId = state.sessions.length ? state.sessions[0].id : null; if (state.activeId) activate(state.activeId, !state.A); }
           renderAll();
         } }),
@@ -258,48 +296,61 @@
     const box = $('lap-list'), s = active(); box.innerHTML = '';
     $('laps-of').textContent = s ? 'in ' + s.trackName : '';
     if (!s) { box.appendChild(h('p', { class: 'empty', text: 'Laps appear here once a telemetry file is loaded.' })); return; }
-    const best = s.bestLap ? s.bestLap.time : null;
+    const best = s.bestLap ? s.bestLap.time : null, ref = refEntry();
+    const timed = s.laps.filter((l) => l.complete && l.valid);
+    box.appendChild(h('div', { class: 'lap-tools' }, [
+      h('button', { class: 'link', type: 'button', text: 'Overlay all ' + timed.length + ' timed laps', disabled: timed.length ? null : true,
+        onclick: () => { for (const l of timed) addLap(s.id, l.idx); renderAll(); } }),
+      h('button', { class: 'link', type: 'button', text: 'Clear overlay', disabled: state.overlay.length ? null : true, onclick: () => { clearLaps(); renderAll(); } }),
+    ]));
     const rows = s.laps.map((l) => {
-      const isA = state.A && state.A.sid === s.id && state.A.lap === l.idx, isB = state.B && state.B.sid === s.id && state.B.lap === l.idx;
+      const e = findEntry(s.id, l.idx), isRef = !!e && e === ref;
       const status = !l.complete ? (l.note || 'partial') : l.pit ? 'pit lane' : !l.valid ? (l.note || 'not counted') : (l.note || '');
-      return h('tr', { class: (isA ? 'is-a ' : '') + (isB ? 'is-b ' : '') + (l.complete && l.valid ? '' : 'dim') }, [
+      return h('tr', { class: l.complete && l.valid ? '' : 'dim', style: e ? 'box-shadow: inset 3px 0 0 var(' + colourVarOf(e.slot) + ')' : null }, [
         h('td', { class: 'num', text: String(l.num) }),
         h('td', { class: 'num strong', text: l.complete ? U.fmtLap(l.time) : '–' }),
         h('td', { class: 'num', text: l.complete && l.valid && best != null ? (l.time === best ? 'best' : U.fmtDelta(l.time - best)) : '' }),
         h('td', { class: 'lap-note', text: status, title: status }),
-        h('td', {}, h('button', { class: 'pill a' + (isA ? ' on' : ''), type: 'button', 'aria-pressed': isA ? 'true' : 'false', title: 'Use as lap A', text: 'A',
-          onclick: () => { state.A = { sid: s.id, lap: l.idx }; if (isB) state.B = null; renderAll(); } })),
-        h('td', {}, h('button', { class: 'pill b' + (isB ? ' on' : ''), type: 'button', 'aria-pressed': isB ? 'true' : 'false', title: isB ? 'Remove lap B' : 'Use as lap B', text: 'B',
-          onclick: () => { state.B = isB ? null : { sid: s.id, lap: l.idx }; if (isA && !isB) state.A = null; renderAll(); } })),
+        h('td', {}, h('button', { class: 'pill' + (e ? ' on' : ''), type: 'button', 'aria-pressed': e ? 'true' : 'false', style: e ? 'background: var(' + colourVarOf(e.slot) + '); border-color: var(' + colourVarOf(e.slot) + ')' : null,
+          title: e ? 'Remove lap ' + letterOf(e.slot) + ' from the overlay' : 'Add this lap to the overlay', 'aria-label': (e ? 'Remove lap ' : 'Overlay lap ') + l.num, text: e ? letterOf(e.slot) : '+',
+          onclick: () => { if (e) removeLap(s.id, l.idx); else addLap(s.id, l.idx); renderAll(); } })),
+        h('td', {}, h('button', { class: 'pill ref' + (isRef ? ' on' : ''), type: 'button', 'aria-pressed': isRef ? 'true' : 'false', title: isRef ? 'This is the reference lap' : 'Make this the reference lap (time differences are measured against it)',
+          'aria-label': 'Reference lap ' + l.num, text: 'Ref', onclick: () => { setRef(s.id, l.idx); renderAll(); } })),
       ]);
     });
     box.appendChild(h('table', { class: 'laps' }, [
-      h('thead', {}, h('tr', {}, ['Lap', 'Time', 'Gap', '', '', ''].map((t) => h('th', { text: t })))),
+      h('thead', {}, h('tr', {}, ['Lap', 'Time', 'Gap', '', 'Overlay', ''].map((t) => h('th', { text: t })))),
       h('tbody', {}, rows),
     ]));
   }
 
   function renderLapbar() {
     const bar = $('lapbar'); bar.innerHTML = '';
-    const a = pick(state.A), b = pick(state.B);
-    const chip = (which, p) => h('div', { class: 'lapchip ' + which }, p ? [
-      h('span', { class: 'lapchip-key' }, [h('i', { class: 'sw' }), 'Lap ' + which.toUpperCase()]),
-      h('span', { class: 'lapchip-time num', text: p.lap.complete ? U.fmtLap(p.lap.time) : 'partial' }),
-      h('span', { class: 'lapchip-meta', text: 'Lap ' + p.lap.num + ', ' + p.session.meta.car + (p.session.id !== state.activeId ? ' (' + p.session.meta.fileName + ')' : '') }),
-    ] : [
-      h('span', { class: 'lapchip-key' }, [h('i', { class: 'sw' }), 'Lap ' + which.toUpperCase()]),
-      h('span', { class: 'lapchip-meta', text: which === 'a' ? 'Pick a lap with the A button in the lap list.' : 'Pick a second lap with the B button to compare.' }),
-    ]);
-    bar.appendChild(chip('a', a)); bar.appendChild(chip('b', b));
-    if (a && b && a.lap.complete && b.lap.complete) {
-      const d = b.lap.time - a.lap.time;
-      bar.appendChild(h('div', { class: 'lapdelta' }, [
-        h('span', { class: 'lapdelta-key', text: 'B − A' }),
-        h('span', { class: 'lapdelta-val num', text: U.fmtDelta(d) + ' s' }),
-        h('span', { class: 'lapdelta-note', text: Math.abs(d) < 0.0005 ? 'identical' : d > 0 ? 'A is faster' : 'B is faster' }),
-      ]));
-      if (U.slug(a.session.trackName) !== U.slug(b.session.trackName)) bar.appendChild(h('div', { class: 'lapwarn', text: 'These laps are from different tracks, so the comparison is not meaningful.' }));
+    const laps = overlayLaps(), ref = laps.find((l) => l.isRef) || null;
+    bar.className = 'lapbar' + (laps.length > 3 ? ' dense' : '');
+    if (!laps.length) {
+      bar.appendChild(h('div', { class: 'lapchip' }, [h('span', { class: 'lapchip-meta', text: state.sessions.length ? 'No laps selected. Use the + buttons in the lap list to overlay as many laps as you like.' : 'Load a telemetry file, then pick laps to overlay.' })]));
+      return;
     }
+    for (const p of laps) {
+      const gap = ref && p !== ref && p.lap.complete && ref.lap.complete ? p.lap.time - ref.lap.time : null;
+      const where = 'Lap ' + p.lap.num + (p.session.setup ? ', ' + p.session.setup.name : '') + (p.session.id !== state.activeId ? ' (' + p.session.meta.fileName + ')' : '');
+      const chip = h('div', { class: 'lapchip' + (p.isRef ? ' is-ref' : ''), style: 'box-shadow: inset 0 3px 0 var(' + p.colorVar + ')', title: where + ', ' + p.session.meta.car }, [
+        h('span', { class: 'lapchip-key' }, [h('i', { class: 'sw', style: 'background: var(' + p.colorVar + ')' }), 'Lap ' + p.letter]),
+        h('span', { class: 'lapchip-time num', text: p.lap.complete ? U.fmtLap(p.lap.time) : 'partial' }),
+        h('span', { class: 'lapchip-meta' }, [p.isRef ? h('b', { text: 'Reference' }) : gap == null ? '' : h('b', { class: 'num', text: U.fmtDelta(gap) + ' s' }), ' ' + where]),
+        h('span', { class: 'lapchip-acts' }, [
+          p.isRef ? null : h('button', { class: 'link', type: 'button', text: 'Make reference', onclick: () => { setRef(p.session.id, p.lap.idx); renderAll(); } }),
+          h('button', { class: 'link', type: 'button', text: 'Remove', 'aria-label': 'Remove lap ' + p.letter, onclick: () => { removeLap(p.session.id, p.lap.idx); renderAll(); } }),
+        ]),
+      ]);
+      chip.addEventListener('mouseenter', () => STA.views.highlight(p.letter));
+      chip.addEventListener('mouseleave', () => STA.views.highlight(null));
+      bar.appendChild(chip);
+    }
+    if (laps.length > SLOT_COLOURS) bar.appendChild(h('div', { class: 'lapwarn', text: 'Eight laps have their own colour. The rest are drawn in grey; point at a lap here to pick it out in the traces and on the map.' }));
+    const tracks = new Set(laps.map((l) => U.slug(l.session.trackName)));
+    if (tracks.size > 1) bar.appendChild(h('div', { class: 'lapwarn', text: 'These laps are from different tracks, so the comparison is not meaningful.' }));
   }
 
   function renderTabs() {
@@ -343,5 +394,5 @@
     renderAll();
   }
 
-  STA.app = { start, state, h, pick, active, sessionById, analysisFor, speed, speedUnit, simName, dateText, say, addFiles, scanFolder, refreshLibrary, renderAll, renderLapbar, renderLaps, activate };
+  STA.app = { start, state, h, pick, active, sessionById, overlayLaps, addLap, removeLap, setRef, clearLaps, letterOf, colourVarOf, analysisFor, speed, speedUnit, simName, dateText, say, addFiles, scanFolder, refreshLibrary, renderAll, renderLapbar, renderLaps, activate };
 })(typeof window !== 'undefined' ? window : globalThis);
