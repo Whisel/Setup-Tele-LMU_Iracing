@@ -105,6 +105,48 @@ test('a change the driver marks as not possible is dropped and the next route is
   assert.strictEqual(STA.library.blocked.list('iracing', 'Test GT3').length, 0);
 });
 
+// A GT3-style clutch-pack differential: lock on power is a count of friction faces.
+const withFaces = (n) => (y) => y.replace('DiffPreload: 80 Nm', 'DiffPreload: 80 Nm\n   ClutchFrictionFaces: ' + n);
+const exitUndersteer = [{ id: 'us', kind: 'understeer', phase: 'exit', band: 'low', title: 'Corner exit understeer', severity: 0.8, confidence: 'medium' }];
+
+test('differential lock on power is never taken below 2 friction faces', () => {
+  const at2 = setupWith(withFaces(2)), at4 = setupWith(withFaces(4));
+  const p2 = STA.setup.byRole(at2, 'diffPower')[0];
+  assert.strictEqual(p2.id, 'drivetrain/differential/clutchfrictionfaces');
+  assert.match(STA.setup.limitReason(p2, '-'), /already at 2, the lowest this setting goes/);
+  assert.strictEqual(STA.setup.limitReason(p2, '+'), null, 'it can still be raised');
+  assert.strictEqual(STA.setup.limitReason(STA.setup.byRole(at4, 'diffPower')[0], '-'), null, 'from 4 it can still come down');
+
+  // exit understeer normally starts with less lock on power; at 2 the app must go elsewhere
+  const adv2 = STA.advisor.advise({ findings: exitUndersteer }, at2);
+  assert.ok(!adv2.suggestions.some((x) => x.role === 'diffPower' && x.dir === '-'));
+  assert.strictEqual(adv2.suggestions[0].role, 'diffPreload', 'next route: less preload');
+  assert.ok(adv2.skipped[0].items.some((i) => /Differential lock on power \(already at 2/.test(i)));
+  const adv4 = STA.advisor.advise({ findings: exitUndersteer }, at4);
+  assert.deepStrictEqual([adv4.suggestions[0].role, adv4.suggestions[0].dir], ['diffPower', '-'], 'at 4 the reduction is offered');
+});
+
+test('a limit the driver reports applies at that value, not for ever', () => {
+  const at80 = setupWith((y) => y), at120 = setupWith((y) => y.replace('DiffPreload: 80 Nm', 'DiffPreload: 120 Nm'));
+  const lim = new Map([['drivetrain/differential/diffpreload|-', { paramId: 'drivetrain/differential/diffpreload', dir: '-', num: 80, raw: '80 Nm' }]]);
+  const none = STA.advisor.advise({ findings: exitUndersteer }, at80);
+  assert.strictEqual(none.suggestions[0].role, 'diffPreload', 'without a limit, less preload is the first available fix');
+  const held = STA.advisor.advise({ findings: exitUndersteer }, at80, { limits: lim });
+  assert.ok(!held.suggestions.some((x) => x.role === 'diffPreload'));
+  assert.ok(held.skipped[0].items.some((i) => /cannot go below 80 Nm on this car/.test(i)));
+  const above = STA.advisor.advise({ findings: exitUndersteer }, at120, { limits: lim });
+  assert.strictEqual(above.suggestions[0].role, 'diffPreload', 'at 120 Nm there is room to come down to the limit');
+  // stored per car, and a role-level block and a value limit can sit side by side
+  STA.library.blocked.clear();
+  STA.library.limits.add('iracing', 'Test GT3', { paramId: 'x/y', dir: '-', num: 2, raw: '2', label: 'X / Y' });
+  STA.library.blocked.add('iracing', 'Test GT3', 'arb|front|+');
+  assert.strictEqual(STA.library.limits.map('iracing', 'test gt3').get('x/y|-').num, 2);
+  assert.deepStrictEqual(STA.library.blocked.list('iracing', 'Test GT3'), ['arb|front|+']);
+  STA.library.limits.remove('iracing', 'Test GT3', 'x/y', '-');
+  assert.strictEqual(STA.library.limits.list('iracing', 'Test GT3').length, 0);
+  STA.library.blocked.clear();
+});
+
 test('baseline also routes around a setting that cannot move', () => {
   const ref = setupWith(rearBarDisconnected);
   const r = STA.baseline.build(ref, { profile: { wot: 0.58, tLow: 0.2, tHigh: 0.15 }, pref: { balance: 'stable' }, track: 'Test Ring' });

@@ -94,7 +94,7 @@
       if (tnd.count < 2) continue;
       const opt = STA.advisor.ruleFor(tnd).find((x) => {
         const axle = x.axle === '@' ? tnd.axle : x.axle;
-        return STA.advisor.resolve(reference, x.role, axle || null, x.dir, opts.blocked || null).params.length > 0;
+        return STA.advisor.resolve(reference, x.role, axle || null, x.dir, { blocked: opts.blocked || null, limits: opts.limits || null }).params.length > 0;
       });
       if (!opt) continue;
       want(opt.role, opt.axle === '@' ? tnd.axle : opt.axle, opt.dir === '+' ? 1 : -1, 'Seen in ' + tnd.count + ' earlier sessions: ' + tnd.title);
@@ -106,7 +106,7 @@
       source: 'baseline', parentId: reference.id, status: 'in progress', tags: {},
     });
     for (const p of setup.params) delete p.note;
-    const changes = [], notApplied = [], blocked = opts.blocked || null, touched = new Set();
+    const changes = [], notApplied = [], blocked = { blocked: opts.blocked || null, limits: opts.limits || null }, touched = new Set();
     for (const e of net.values()) {
       if (!e.n) continue;
       const n = U.clamp(e.n, -3, 3), dir = n > 0 ? '+' : '-';

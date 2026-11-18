@@ -76,10 +76,14 @@ setup that was on the car.
   suggestions.
 - **"Not possible on this car".** LMU reports each setting's range, so the app knows its
   limits. iRacing does not, so there the app only knows a limit when the value itself says
-  so (a bar that reads "Disconnected", a setting at zero). If it still suggests something
-  the garage will not allow, press **Not possible on this car** on that suggestion. The
-  app remembers it for that car, stops suggesting it, and re-plans around it. It can be
-  undone from the list under the suggestions.
+  so (a bar that reads "Disconnected", a setting at zero) or when it is built in: a
+  differential's lock on power, set as a count of clutch friction faces, is never taken
+  below 2. If the app still suggests something the garage will not allow, press **Not
+  possible on this car** on that suggestion. The app records the current value as the
+  limit in that direction for that car, stops suggesting the change, and re-plans around
+  it. The limit is tied to the value: if "cannot go below 2" is recorded and a later setup
+  has 4, a reduction is offered again. Limits can be removed from the list under the
+  suggestions, and they are included in the library export.
 
 Each finding carries a confidence level:
 

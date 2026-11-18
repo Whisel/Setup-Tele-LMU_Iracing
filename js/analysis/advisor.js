@@ -215,22 +215,25 @@
   const blockKey = (role, axle, dir) => role + '|' + (axle || '') + '|' + dir;
 
   /* Settings for an option on this setup, and why it cannot be used if it cannot. */
-  function resolve(setup, role, axle, dir, blocked) {
+  function resolve(setup, role, axle, dir, guard) {
+    // guard = { blocked: Set of "role|axle|dir", limits: Map of "paramId|dir" -> limit }. A bare Set is accepted as `blocked`.
+    const blocked = guard instanceof Set ? guard : guard && guard.blocked, limits = guard instanceof Set ? null : guard && guard.limits;
     let params = SU().byRole(setup, role, axle || undefined);
     if (role === 'brakeBias') params = params.filter((p) => !/fine|peak|migration/.test(p.id)).slice(0, 1);
     if (role === 'tc' || role === 'abs') params = params.filter((p) => U.isNum(p.num)).slice(0, 1);
     const label = labelFor(role, axle);
     if (!params.length) return { params, why: label + ' (not adjustable on this car)' };
     if (blocked && blocked.has(blockKey(role, axle, dir))) return { params: [], why: titleFor(role, dir, axle) + ' (you marked this as not possible)' };
-    const stuck = params.map((p) => SU().limitReason(p, dir));
+    const stuck = params.map((p) => SU().limitReason(p, dir, limits));
     if (stuck.every(Boolean)) return { params: [], why: label + ' (' + stuck[0] + ')' };
     return { params: params.filter((p, i) => !stuck[i]), why: null };
   }
 
   /* findings + the setup on the car -> ordered suggestions.
-     opts.blocked: Set of "role|axle|dir" keys the driver has marked as not possible. */
+     opts.blocked: Set of "role|axle|dir" keys the driver has ruled out altogether.
+     opts.limits:  Map of "paramId|dir" -> { num, raw } limits the driver has reported. */
   function advise(analysis, setup, opts) {
-    const suggestions = [], skipped = [], byKey = new Map(), blocked = (opts && opts.blocked) || null;
+    const suggestions = [], skipped = [], byKey = new Map(), blocked = { blocked: (opts && opts.blocked) || null, limits: (opts && opts.limits) || null };
     if (!setup) return { suggestions, skipped, note: 'This file has no setup stored in it, so advice is given as findings only. Load the setup to get specific changes.' };
 
     for (const f of analysis.findings) {

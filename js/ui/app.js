@@ -53,7 +53,8 @@
   function analysisFor(session) {
     if (!state.analysis.has(session.id)) state.analysis.set(session.id, STA.handling.analyse(session));
     const an = state.analysis.get(session.id);
-    return { an, adv: STA.advisor.advise(an, session.setup, { blocked: STA.library.blocked.set(session.meta.sim, session.meta.car) }) };
+    const sim = session.meta.sim, car = session.meta.car;
+    return { an, adv: STA.advisor.advise(an, session.setup, { blocked: STA.library.blocked.set(sim, car), limits: STA.library.limits.map(sim, car) }) };
   }
 
   function say(kind, text) {

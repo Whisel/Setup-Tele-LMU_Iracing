@@ -345,7 +345,7 @@
       ]));
     }
 
-    const list = h('div', { class: 'suggestions' }), blockedList = STA.library.blocked.list(s.meta.sim, s.meta.car);
+    const list = h('div', { class: 'suggestions' }), blockedList = STA.library.blocked.list(s.meta.sim, s.meta.car), limitList = STA.library.limits.list(s.meta.sim, s.meta.car);
     if (!s.setup) list.appendChild(h('p', { class: 'empty', text: adv.note }));
     else if (!adv.suggestions.length) list.appendChild(h('p', { class: 'empty', text: an.findings.length ? 'None of the usual fixes for these findings can be made on this car\'s setup. The reasons are listed below.' : 'No changes suggested. Keep this setup and work on the laps themselves with the comparison tools.' }));
     adv.suggestions.forEach((x) => {
@@ -359,8 +359,15 @@
           h('p', { class: 'evidence', text: 'Addresses: ' + x.reasons.join('; ') + '.' + (x.conflict ? ' Works against: ' + x.conflict.join('; ') + '.' : '') }),
         ]),
         h('div', { class: 'suggestion-side' }, [confTag(x.confidence),
-          h('button', { class: 'link', type: 'button', text: 'Not possible on this car', title: 'Hide this change for this car and look for another way to get the same effect',
-            onclick: () => { STA.library.blocked.add(s.meta.sim, s.meta.car, x.blockKey); delete checked[x.key]; ui().adviceChecked = null; render(); } })]),
+          h('button', { class: 'link', type: 'button', text: 'Not possible on this car', title: 'Records that this setting cannot go any further than its current value on this car, then looks for another way to get the same effect',
+            onclick: () => {
+              // Remember the current value as the limit in this direction, so the change is offered again if the value later moves away from it.
+              for (const p of s.setup.params) {
+                if (x.paramIds.indexOf(p.id) < 0) continue;
+                STA.library.limits.add(s.meta.sim, s.meta.car, { paramId: p.id, dir: x.dir, num: U.isNum(p.num) ? p.num : null, raw: p.raw, label: p.section + ' / ' + p.label });
+              }
+              ui().adviceChecked = null; render();
+            } })]),
       ]));
     });
     const nameIn = h('input', { type: 'text', class: 'text', value: (s.setup ? s.setup.name : 'Setup') + ' – revised', 'aria-label': 'Name for the revised setup' });
@@ -370,6 +377,9 @@
       list,
       adv.skipped.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Left out because this car cannot do them' }),
         h('ul', { class: 'plain' }, adv.skipped.map((k) => h('li', {}, [h('b', { text: k.finding + ': ' }), k.items.join('; ') + '.'])))]) : null,
+      limitList.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Limits you have set for the ' + s.meta.car }),
+        h('ul', { class: 'plain' }, limitList.map((e) => h('li', {}, [h('b', { text: e.label + ': ' }), 'cannot go ' + (e.dir === '-' ? 'below ' : 'above ') + e.raw + ' ',
+          h('button', { class: 'link', type: 'button', text: 'Remove limit', onclick: () => { STA.library.limits.remove(s.meta.sim, s.meta.car, e.paramId, e.dir); ui().adviceChecked = null; render(); } })])))]) : null,
       blockedList.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Changes you marked as not possible on the ' + s.meta.car }),
         h('ul', { class: 'plain' }, blockedList.map((key) => { const [role, axle, dir] = key.split('|'); return h('li', {}, [STA.advisor.titleFor(role, dir, axle || null) + ' ',
           h('button', { class: 'link', type: 'button', text: 'Allow again', onclick: () => { STA.library.blocked.remove(s.meta.sim, s.meta.car, key); ui().adviceChecked = null; render(); } })]); }))]) : null,
@@ -465,7 +475,7 @@
         profile ? [] : [h('li', { text: 'There is no telemetry for ' + b.track + ' in this sim yet, so anything left on "Decide from telemetry" uses the middle setting.' })],
         tnd.filter((t) => t.count >= 2).map((t) => h('li', { text: 'Your earlier sessions with this car keep showing: ' + t.title.toLowerCase() + ' (' + t.count + ' sessions). The baseline leans against it.' })))),
       h('div', { class: 'actions' }, [h('button', { class: 'btn', type: 'button', text: 'Build baseline for ' + b.track, onclick: () => {
-        b.result = STA.baseline.build(ref, { profile, pref: b.pref, tendencies: tnd, track: b.track, name: 'App baseline – ' + b.track, blocked: STA.library.blocked.set(b.sim, b.car) });
+        b.result = STA.baseline.build(ref, { profile, pref: b.pref, tendencies: tnd, track: b.track, name: 'App baseline – ' + b.track, blocked: STA.library.blocked.set(b.sim, b.car), limits: STA.library.limits.map(b.sim, b.car) });
         b.result.setup.car = b.car; b.result.setup.carClass = ref.carClass; render();
       } })]),
     ]));

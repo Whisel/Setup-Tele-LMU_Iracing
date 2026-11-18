@@ -119,7 +119,11 @@
     for (const s of data.setups) if (s && s.id && Array.isArray(s.params)) await b.put('setups', s);
     for (const s of data.sessions || []) if (s && s.id) await b.put('sessions', s);
     if (data.blocked && typeof data.blocked === 'object') {
-      for (const k of Object.keys(data.blocked)) if (Array.isArray(data.blocked[k])) blockedAll()[k] = Array.from(new Set((blockedAll()[k] || []).concat(data.blocked[k].map(String))));
+      for (const k of Object.keys(data.blocked)) {
+        if (!Array.isArray(data.blocked[k])) continue;
+        const have = new Set((blockedAll()[k] || []).map((e) => JSON.stringify(e)));
+        blockedAll()[k] = (blockedAll()[k] || []).concat(data.blocked[k].filter((e) => (typeof e === 'string' || isLimit(e)) && !have.has(JSON.stringify(e))));
+      }
       blockedSave();
     }
     return { setups: data.setups.length, sessions: (data.sessions || []).length };
@@ -136,17 +140,28 @@
   }
   function blockedSave() { try { root.localStorage.setItem('sta-blocked', JSON.stringify(blockedMem)); } catch (e) { /* kept for this visit only */ } }
   const carKey = (sim, car) => sim + '|' + U.slug(car);
+  // Entries per car are either a string "role|axle|dir" (a change ruled out altogether) or an
+  // object { paramId, dir, num, raw, label } (a setting that cannot go past a value).
+  const entries = (sim, car) => blockedAll()[carKey(sim, car)] || [];
+  const put = (sim, car, list) => { blockedAll()[carKey(sim, car)] = list; blockedSave(); };
   const blocked = {
-    list: (sim, car) => (blockedAll()[carKey(sim, car)] || []).slice(),
-    set: (sim, car) => new Set(blockedAll()[carKey(sim, car)] || []),
-    add: (sim, car, key) => { const all = blockedAll(), k = carKey(sim, car); all[k] = Array.from(new Set((all[k] || []).concat(key))); blockedSave(); },
-    remove: (sim, car, key) => { const all = blockedAll(), k = carKey(sim, car); all[k] = (all[k] || []).filter((x) => x !== key); blockedSave(); },
+    list: (sim, car) => entries(sim, car).filter((e) => typeof e === 'string'),
+    set: (sim, car) => new Set(entries(sim, car).filter((e) => typeof e === 'string')),
+    add: (sim, car, key) => put(sim, car, entries(sim, car).filter((e) => e !== key).concat(key)),
+    remove: (sim, car, key) => put(sim, car, entries(sim, car).filter((e) => e !== key)),
     clear: () => { blockedMem = {}; blockedSave(); },
+  };
+  const isLimit = (e) => e && typeof e === 'object' && e.paramId && (e.dir === '+' || e.dir === '-');
+  const limits = {
+    list: (sim, car) => entries(sim, car).filter(isLimit),
+    map: (sim, car) => new Map(entries(sim, car).filter(isLimit).map((e) => [e.paramId + '|' + e.dir, e])),
+    add: (sim, car, e) => put(sim, car, entries(sim, car).filter((x) => !(isLimit(x) && x.paramId === e.paramId && x.dir === e.dir)).concat(e)),
+    remove: (sim, car, paramId, dir) => put(sim, car, entries(sim, car).filter((x) => !(isLimit(x) && x.paramId === paramId && x.dir === dir))),
   };
 
   const sameCar = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
   const sameTrack = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
 
-  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked,
+  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked, limits,
     get persistent() { return backend ? backend.persistent : null; } };
 })(typeof window !== 'undefined' ? window : globalThis);

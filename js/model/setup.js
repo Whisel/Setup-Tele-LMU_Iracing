@@ -341,13 +341,22 @@
   const FLOOR_WORDS = /disconnect|detach|unhook|removed|not fitted|\bnone\b|\boff\b/i;
   const NEVER_NEGATIVE = { arb: 1, spring: 1, thirdSpring: 1, packers: 1, rearWing: 1, frontAero: 1, slowBump: 1, slowRebound: 1, fastBump: 1,
     fastRebound: 1, diffPreload: 1, diffPower: 1, diffCoast: 1, tc: 1, abs: 1, brakePressure: 1, engineBraking: 1 };
-  function limitReason(p, dir) {
+  const bareInteger = (p) => U.isNum(p.num) && !p.unit && /^\s*-?\d+\s*$/.test(String(p.was != null ? p.was : p.raw));
+  /* learned: Map of "paramId|dir" -> { num, raw } limits the driver has reported for this car. */
+  function limitReason(p, dir, learned) {
     if (p.index != null && p.min != null && p.max != null) {
       return (dir === '+' ? p.index >= p.max : p.index <= p.min) ? 'already at the end of its range (' + p.raw + ')' : null;
     }
     const raw = String(p.was != null ? p.was : p.raw).trim();
+    const L = learned && learned.get(p.id + '|' + dir);
+    if (L) {
+      if (U.isNum(L.num) && U.isNum(p.num)) { if (dir === '-' ? p.num <= L.num : p.num >= L.num) return 'cannot go ' + (dir === '-' ? 'below ' : 'above ') + L.raw + ' on this car'; }
+      else if (norm(L.raw) === norm(raw)) return 'cannot go ' + (dir === '-' ? 'below ' : 'above ') + L.raw + ' on this car';
+    }
     if (dir === '-' && FLOOR_WORDS.test(raw)) return 'already ' + raw.toLowerCase();
     if (dir === '-' && NEVER_NEGATIVE[p.role] && U.isNum(p.num) && p.num <= 0 && !/deg|°/i.test(p.unit || '')) return 'already at ' + raw;
+    // A clutch-pack differential's lock on power is set as a count of friction faces, and 2 is the fewest it can run.
+    if (dir === '-' && p.role === 'diffPower' && bareInteger(p) && p.num <= 2) return 'already at ' + raw + ', the lowest this setting goes';
     return null;
   }
 
