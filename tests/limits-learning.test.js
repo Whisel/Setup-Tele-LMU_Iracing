@@ -136,7 +136,7 @@ test('a softer front bar that cures slow-corner understeer is judged to have hel
   const plain = STA.advisor.advise({ findings }, before.setup), learned = STA.advisor.advise({ findings }, before.setup, { outcomes: out });
   const pick = (adv) => adv.suggestions.find((x) => x.blockKey === 'arb|front|-');
   assert.ok(pick(learned).score > pick(plain).score);
-  assert.match(pick(learned).historyText, /Tried once on this car before: 1 helped/);
+  assert.match(pick(learned).historyText, /On this car before: 1 helped\./);
 });
 
 test('a change that twice fails to help is moved below the alternatives', async () => {
@@ -155,7 +155,7 @@ test('a change that twice fails to help is moved below the alternatives', async 
   const an = STA.handling.analyse(runs[2]);
   const adv = STA.advisor.advise(an, runs[2].setup, { outcomes: out });
   const bar = adv.suggestions.find((x) => x.blockKey === 'arb|front|-');
-  if (bar) { assert.ok(bar.demoted); assert.strictEqual(bar.rank, adv.suggestions.length, 'listed last'); assert.match(bar.historyText, /2 made no clear difference/); }
+  if (bar) { assert.ok(bar.demoted); assert.strictEqual(bar.rank, adv.suggestions.length, 'listed last'); assert.match(bar.historyText, /2 no effect\. Listed last\./); }
   assert.notStrictEqual(adv.suggestions[0].blockKey, 'arb|front|-');
   // a different car starts with a clean sheet
   assert.strictEqual(STA.learning.outcomes(sums, setups, { sim: 'iracing', car: 'Other Car' }).size, 0);
@@ -200,7 +200,7 @@ test('driving technique: a corner the best lap was slow through shows up as time
   assert.strictEqual(tech.ideal.sections[0].lap, odd.num, 'and it names the lap that did it better');
   assert.ok(Math.abs(tech.ideal.sections[0].lost - 0.4) < 0.05, 'about 0.4 s: ' + tech.ideal.sections[0].lost);
   assert.ok(Math.abs(tech.ideal.gain - 0.4) < 0.08, 'total: ' + tech.ideal.gain);
-  assert.match(ideal.title, /quicker than your best lap/);
+  assert.match(ideal.title, /^Best sections add up to .* \(−0\.\d\d s\)$/);
 });
 
 test('driving technique: every balance finding has something to try from the seat', () => {
@@ -224,14 +224,14 @@ test('a contested change is taken out and the next route is offered in its place
   assert.ok(!adv.suggestions.some((x) => x.blockKey === 'arb|front|-'), 'the contested change is gone');
   assert.ok(adv.suggestions.length >= 2, 'and the finding still gets its usual number of answers');
   assert.strictEqual(adv.suggestions[0].blockKey, 'arb|rear|+', 'a stiffer rear bar shifts roll stiffness the same way');
-  assert.deepStrictEqual(adv.suggestions[0].alternativeTo, ['Soften the front anti-roll bar (you did not want the trade-off)']);
-  assert.ok(adv.skipped[0].items.some((i) => /you did not want the trade-off/.test(i)));
+  assert.deepStrictEqual(adv.suggestions[0].alternativeTo, ['Soften the front anti-roll bar (trade-off not wanted)']);
+  assert.ok(adv.skipped[0].items.some((i) => /trade-off not wanted/.test(i)));
 
   // contesting the alternative as well moves on again, and each reason is reported in the driver's terms
   const two = STA.advisor.advise({ findings: midUndersteer }, s, { contested: contest(['arb|front|-', 'none'], ['arb|rear|+', 'worse']) });
   assert.ok(!two.suggestions.some((x) => x.role === 'arb'));
   assert.ok(two.suggestions.length >= 1);
-  assert.deepStrictEqual(two.suggestions[0].alternativeTo, ['Soften the front anti-roll bar (you tried it and it did not help)', 'Stiffen the rear anti-roll bar (you tried it and it made the car worse)']);
+  assert.deepStrictEqual(two.suggestions[0].alternativeTo, ['Soften the front anti-roll bar (tried, did not help)', 'Stiffen the rear anti-roll bar (tried, made it worse)']);
   // the opposite direction is a different change and is not affected
   const os = [{ id: 'os-mid-low', kind: 'oversteer', phase: 'mid', band: 'low', title: 'Mid-corner oversteer in slow corners', severity: 0.7, confidence: 'medium' }];
   assert.ok(STA.advisor.advise({ findings: os }, s, { contested: contest(['arb|front|-', 'tradeoff']) }).suggestions.some((x) => x.blockKey === 'arb|front|+'));
@@ -285,7 +285,7 @@ test('baseline: a contested change is replaced by another route to the same effe
   assert.ok(bar, 'a stable car normally starts with a softer rear bar');
   const again = STA.baseline.build(ref, Object.assign({ contested: contest(['arb|rear|-', 'tradeoff']) }, opts));
   assert.ok(!again.changes.some((c) => c.key === 'arb|rear|-'));
-  const alt = again.changes.find((c) => /Used instead of: Soften the rear anti-roll bar \(you did not want the trade-off\)/.test(c.why));
+  const alt = again.changes.find((c) => /Used instead of: Soften the rear anti-roll bar \(trade-off not wanted\)/.test(c.why));
   assert.ok(alt, JSON.stringify(again.changes.map((c) => [c.key, c.why])));
   assert.strictEqual(STA.setup.byRole(again.setup, 'arb', 'rear')[0].raw, STA.setup.byRole(ref, 'arb', 'rear')[0].raw, 'the rear bar is left where it was');
 });
@@ -297,5 +297,5 @@ test('baseline: contesting the rear wing change also drops the front aero change
   const again = STA.baseline.build(ref, Object.assign({ contested: contest(['rearWing|rear|-', 'tradeoff']) }, opts));
   assert.deepStrictEqual(again.changes, [], 'the front is not trimmed on its own');
   assert.ok(again.notApplied.some((x) => x.label === 'Front aero' && /only wanted together with the rear wing change/.test(x.reason)));
-  assert.ok(again.notApplied.some((x) => x.label === 'Rear wing' && /you did not want the trade-off/.test(x.reason)));
+  assert.ok(again.notApplied.some((x) => x.label === 'Rear wing' && /trade-off not wanted/.test(x.reason)));
 });

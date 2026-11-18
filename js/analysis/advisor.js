@@ -232,9 +232,9 @@
   /* Why a driver contested a suggested change. Any of these takes the change out of the
      advice for that car until it is allowed again, and the next route is offered instead. */
   const CONTEST = {
-    tradeoff: { label: 'I do not want this trade-off', text: 'you did not want the trade-off' },
-    none: { label: 'I tried it and it did not help', text: 'you tried it and it did not help' },
-    worse: { label: 'I tried it and it made the car worse', text: 'you tried it and it made the car worse' },
+    tradeoff: { label: 'I do not want this trade-off', text: 'trade-off not wanted' },
+    none: { label: 'I tried it and it did not help', text: 'tried, did not help' },
+    worse: { label: 'I tried it and it made the car worse', text: 'tried, made it worse' },
   };
   const contestText = (e) => (CONTEST[e && e.reason] || CONTEST.tradeoff).text;
 
@@ -273,9 +273,8 @@
       const s = {
         key: g.key, blockKey: blockKey(g.role, g.axle, dir), role: g.role, axle: g.axle, dir, title, amount: '', fix: true,
         paramIds: g.params.map((p) => p.id), current: SU().describe(g.params), change: { text: title, to: g.bound },
-        effect: 'Brings this setting back inside what the car allows (' + (g.side === 'above' ? 'no more than ' : 'no less than ') + to + ', ' + g.src + ').',
-        cost: 'Until it is inside the limit the car can fail technical inspection, so make this change before judging any other.',
-        reasons: [labelFor(g.role, g.axle) + ' is ' + g.side + ' the limit for this car'], findingIds: [],
+        effect: 'Limit: ' + (g.side === 'above' ? 'max ' : 'min ') + to + ' (' + g.src.replace(/^from the /, '') + '). Do this first; the car can fail tech inspection as it is.',
+        cost: '', reasons: [labelFor(g.role, g.axle) + ' ' + g.side + ' the limit'], findingIds: [],
         confidence: /manual/.test(g.src) ? 'high' : 'medium', primary: true, insteadOf: null, score: 100,
       };
       byKey.set(g.key, s); suggestions.push(s);
@@ -292,8 +291,7 @@
     s.score *= U.clamp(1 + 0.3 * (st.helped - st.hurt) - 0.15 * st.none, 0.4, 1.6);
     if (st.helped === 0 && st.hurt + st.none >= 2) s.demoted = true;
     const n = (k, word) => (k ? k + ' ' + word : null);
-    s.historyText = 'Tried ' + (st.tried === 1 ? 'once' : st.tried + ' times') + ' on this car before: ' + [n(st.helped, 'helped'), n(st.none, 'made no clear difference'), n(st.hurt, 'made it worse')].filter(Boolean).join(', ') + '.'
-      + (s.demoted ? ' It is listed after the others for that reason.' : st.helped > st.hurt + st.none ? ' It is ranked higher for that reason.' : '');
+    s.historyText = 'On this car before: ' + [n(st.helped, 'helped'), n(st.none, 'no effect'), n(st.hurt, 'worse')].filter(Boolean).join(', ') + (s.demoted ? '. Listed last.' : '.');
   }
 
   /* findings + the setup on the car -> ordered suggestions.

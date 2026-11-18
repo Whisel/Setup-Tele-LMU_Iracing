@@ -196,6 +196,16 @@ app cannot tell which one did what. It says so on the page when that applies. Th
 re-orders and annotates the general rules; it does not invent new rules or learn how big a
 step your car needs.
 
+## How the advice is laid out
+
+The Setup advice tab leads with the changes. Each one is two lines: what to change and
+by how much, then the current value, the problem it fixes and what it costs. Anything
+else is a click away: "How it works" under a change, "Not offered" for routes the car
+cannot take, "Balance by corner phase and speed" under the findings, and the car's
+limits at the bottom. "Did the last change work?" only appears when there is an earlier
+session with the same car and track to compare with. The Driving technique tab follows
+the same pattern: a headline number, one thing to try, and the corners it applies to.
+
 Each finding carries a confidence level:
 
 - **High**: measured directly on three or more laps (for example wheel speeds), or a

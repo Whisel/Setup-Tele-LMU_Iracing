@@ -19,7 +19,8 @@
   const U = STA.util, G = STA.G, S = () => STA.session;
 
   const PHASES = ['entry', 'mid', 'exit'], BANDS = ['low', 'medium', 'high'];
-  const BAND_TEXT = { low: 'slow corners (under 100 km/h)', medium: 'medium-speed corners (100–160 km/h)', high: 'fast corners (over 160 km/h)' };
+  const BAND_TEXT = { low: 'slow corners', medium: 'medium corners', high: 'fast corners' };
+  const BAND_RANGE = { low: 'under 100 km/h', medium: '100–160 km/h', high: 'over 160 km/h' };
   const PHASE_TEXT = { entry: 'Corner entry', mid: 'Mid-corner', exit: 'Corner exit' };
 
   function pickLaps(session, lapIdxs) {
@@ -104,8 +105,8 @@
               out.findings.push({
                 id: 'us-' + ph + '-' + b, kind: 'understeer', phase: ph, band: b, area: 'Balance',
                 title: PHASE_TEXT[ph] + ' understeer in ' + BAND_TEXT[b],
-                detail: 'Near the grip limit you are holding ' + Math.round(m.idx * 100) + '% of your usual steering range more lock than the car needs when it is gripping. The front is running out of grip first.',
-                evidence: (worst.length ? 'Strongest in ' + worst.join(', ') + '. ' : '') + 'Based on ' + lapWord + '.',
+                detail: 'Front gives up first: ' + Math.round(m.idx * 100) + '% more steering than the car needs at the limit.',
+                evidence: (worst.length ? 'Worst in ' + worst.join(', ') + '. ' : '') + lapWord + '.',
                 severity: U.clamp((m.idx - 0.2) / 0.5, 0.1, 1), confidence: baseConf, corners: worst,
               });
             } else if (m.idx <= OS) {
@@ -113,8 +114,8 @@
               out.findings.push({
                 id: 'os-' + ph + '-' + b, kind: 'oversteer', phase: ph, band: b, area: 'Balance',
                 title: PHASE_TEXT[ph] + ' oversteer in ' + BAND_TEXT[b],
-                detail: 'Near the grip limit you are using ' + Math.round(-m.idx * 100) + '% of your usual steering range less lock than the car needs when it is gripping. The rear is rotating the car for you.',
-                evidence: (worst.length ? 'Strongest in ' + worst.join(', ') + '. ' : '') + 'Based on ' + lapWord + '.',
+                detail: 'Rear rotates the car: ' + Math.round(-m.idx * 100) + '% less steering than the car needs at the limit.',
+                evidence: (worst.length ? 'Worst in ' + worst.join(', ') + '. ' : '') + lapWord + '.',
                 severity: U.clamp((-m.idx) / 0.4, 0.1, 1), confidence: baseConf, corners: worst,
               });
             }
@@ -133,9 +134,9 @@
               id: (kind === 'understeer' ? 'us-' : 'os-') + ph + '-' + band, kind, phase: ph, band, area: 'Balance',
               title: PHASE_TEXT[ph] + ' ' + kind + ' in ' + list.map((c) => c.name).join(', '),
               detail: kind === 'understeer'
-                ? 'In these corners you hold about ' + Math.round(mean * 100) + '% of your usual steering range more lock than the car needs when it is gripping. The front runs out of grip first there.'
-                : 'In these corners you use about ' + Math.round(-mean * 100) + '% of your usual steering range less lock than the car needs when it is gripping. The rear is rotating the car there.',
-              evidence: 'Other corners are closer to neutral in this phase. Based on ' + lapWord + '.',
+                ? 'Front gives up first here: about ' + Math.round(mean * 100) + '% more steering than the car needs.'
+                : 'Rear rotates the car here: about ' + Math.round(-mean * 100) + '% less steering than the car needs.',
+              evidence: 'Other corners are near neutral in this phase. ' + lapWord + '.',
               severity: U.clamp(Math.abs(mean) / 0.7, 0.2, 0.8), confidence: baseConf, corners: list.map((c) => c.name),
             });
           }
@@ -146,8 +147,8 @@
             out.findings.push({
               id: 'os-counter-' + ph, kind: 'oversteer', phase: ph, band: 'low', area: 'Balance',
               title: PHASE_TEXT[ph] + ' oversteer (opposite lock)',
-              detail: 'You are on opposite lock for ' + (share * 100).toFixed(1) + '% of the time spent near the limit in this phase, which means catching the rear.',
-              evidence: 'Based on ' + lapWord + '.', severity: U.clamp(share / 0.1, 0.2, 1), confidence: baseConf, corners: [],
+              detail: 'On opposite lock for ' + (share * 100).toFixed(1) + '% of the time near the limit.',
+              evidence: lapWord + '.', severity: U.clamp(share / 0.1, 0.2, 1), confidence: baseConf, corners: [],
             });
           }
         }
@@ -188,17 +189,17 @@
           out.findings.push({
             id: 'exit-lift', kind: front ? 'understeer' : 'traction', phase: 'exit', band: 'low', area: 'Traction',
             title: front ? 'Lifting on exit to wait for the front' : 'Lifting on exit to keep the rear in line',
-            detail: 'After getting back on the throttle you come off it again before reaching full throttle in ' + repeat.join(', ') + '.',
-            evidence: 'Seen on at least half of the ' + lapWord + ' analysed.', severity: U.clamp(repeat.length / 5, 0.3, 0.9), confidence: baseConf, corners: repeat,
+            detail: 'Throttle comes back off before reaching full in ' + repeat.join(', ') + '.',
+            evidence: 'At least half of ' + lapWord + '.', severity: U.clamp(repeat.length / 5, 0.3, 0.9), confidence: baseConf, corners: repeat,
           });
         }
       }
       if (out.exits.tcShare != null && out.exits.tcShare > 0.15 && tcRepeat.length >= 2) {
         out.findings.push({
           id: 'tc-busy', kind: 'traction', phase: 'exit', band: 'low', area: 'Traction',
-          title: 'Traction control is doing a lot of work on exit',
-          detail: 'Traction control is cutting power for ' + Math.round(out.exits.tcShare * 100) + '% of the time you are on the throttle out of corners, mostly in ' + tcRepeat.join(', ') + '. Rear grip, not engine power, is limiting your exits.',
-          evidence: 'Traction-control channel, ' + lapWord + '.', severity: U.clamp(out.exits.tcShare / 0.5, 0.3, 0.9), confidence: conf(laps.length), corners: tcRepeat, tcBusy: true,
+          title: 'Traction control busy on exit',
+          detail: 'TC cuts power for ' + Math.round(out.exits.tcShare * 100) + '% of exit throttle time, mostly in ' + tcRepeat.join(', ') + '.',
+          evidence: 'TC channel, ' + lapWord + '.', severity: U.clamp(out.exits.tcShare / 0.5, 0.3, 0.9), confidence: conf(laps.length), corners: tcRepeat, tcBusy: true,
         });
       }
     }
@@ -225,13 +226,13 @@
       out.wheels = { frontLock: brakeN ? fLock / brakeN : 0, rearLock: brakeN ? rLock / brakeN : 0, rearSpin: powN ? rSpin / powN : 0,
         frontSpin: powN ? fSpin / powN : 0, absShare: brakeN && grids[0].abs ? absOn / brakeN : null };
       const W = out.wheels;
-      if (W.frontLock > 0.04 && W.frontLock > W.rearLock * 1.5) out.findings.push({ id: 'front-lock', kind: 'frontLock', area: 'Braking', title: 'Front wheels locking under braking',
-        detail: 'A front wheel is turning at least 14% slower than the car for ' + (W.frontLock * 100).toFixed(1) + '% of hard braking.', evidence: 'Wheel-speed channels, ' + lapWord + '.', severity: U.clamp(W.frontLock / 0.15, 0.2, 1), confidence: conf(laps.length) });
-      if (W.rearLock > 0.03 && W.rearLock >= W.frontLock) out.findings.push({ id: 'rear-lock', kind: 'rearLock', area: 'Braking', title: 'Rear wheels locking under braking',
-        detail: 'A rear wheel is turning at least 14% slower than the car for ' + (W.rearLock * 100).toFixed(1) + '% of hard braking, which makes the car unstable on entry.', evidence: 'Wheel-speed channels, ' + lapWord + '.', severity: U.clamp(W.rearLock / 0.1, 0.3, 1), confidence: conf(laps.length) });
+      if (W.frontLock > 0.04 && W.frontLock > W.rearLock * 1.5) out.findings.push({ id: 'front-lock', kind: 'frontLock', area: 'Braking', title: 'Front wheels locking',
+        detail: 'A front wheel runs 14%+ slower than the car for ' + (W.frontLock * 100).toFixed(1) + '% of hard braking.', evidence: 'Wheel speeds, ' + lapWord + '.', severity: U.clamp(W.frontLock / 0.15, 0.2, 1), confidence: conf(laps.length) });
+      if (W.rearLock > 0.03 && W.rearLock >= W.frontLock) out.findings.push({ id: 'rear-lock', kind: 'rearLock', area: 'Braking', title: 'Rear wheels locking',
+        detail: 'A rear wheel runs 14%+ slower than the car for ' + (W.rearLock * 100).toFixed(1) + '% of hard braking.', evidence: 'Wheel speeds, ' + lapWord + '.', severity: U.clamp(W.rearLock / 0.1, 0.3, 1), confidence: conf(laps.length) });
       const spin = Math.max(W.rearSpin, W.frontSpin), axle = W.rearSpin >= W.frontSpin ? 'rear' : 'front';
-      if (spin > 0.05) out.findings.push({ id: 'wheelspin', kind: 'wheelspin', axle, area: 'Traction', title: 'Wheelspin on the ' + axle + ' axle under power',
-        detail: 'The ' + axle + ' wheels run at least 6% faster than the other axle for ' + (spin * 100).toFixed(1) + '% of low-speed acceleration.', evidence: 'Wheel-speed channels, ' + lapWord + '.', severity: U.clamp(spin / 0.2, 0.2, 1), confidence: conf(laps.length) });
+      if (spin > 0.05) out.findings.push({ id: 'wheelspin', kind: 'wheelspin', axle, area: 'Traction', title: (axle === 'rear' ? 'Rear' : 'Front') + ' wheelspin under power',
+        detail: 'Driven wheels run 6%+ faster than the other axle for ' + (spin * 100).toFixed(1) + '% of low-speed acceleration.', evidence: 'Wheel speeds, ' + lapWord + '.', severity: U.clamp(spin / 0.2, 0.2, 1), confidence: conf(laps.length) });
     }
 
     /* ---------- tyres ---------- */
@@ -256,14 +257,14 @@
         const tConf = live ? baseConf : 'low';
         for (const [axle, a, b] of [['front', 0, 1], ['rear', 2, 3]]) {
           const spread = (rows[a].spread + rows[b].spread) / 2, crown = (rows[a].crown + rows[b].crown) / 2;
-          if (spread > 16) out.findings.push({ id: 'camber-much-' + axle, kind: 'camberTooMuch', axle, area: 'Tyres', title: 'Too much negative camber on the ' + axle + ' axle',
-            detail: 'The inner edge runs ' + spread.toFixed(0) + ' °C hotter than the outer edge. A spread of roughly 5–12 °C usually uses the whole tread.', evidence: out.tyres.note, severity: U.clamp((spread - 12) / 15, 0.2, 0.8), confidence: tConf });
-          else if (spread < 2) out.findings.push({ id: 'camber-little-' + axle, kind: 'camberTooLittle', axle, area: 'Tyres', title: 'Not enough negative camber on the ' + axle + ' axle',
-            detail: 'The inner edge is only ' + spread.toFixed(0) + ' °C hotter than the outer edge, so the outer shoulder is doing too much of the work in corners.', evidence: out.tyres.note, severity: U.clamp((5 - spread) / 12, 0.2, 0.8), confidence: tConf });
+          if (spread > 16) out.findings.push({ id: 'camber-much-' + axle, kind: 'camberTooMuch', axle, area: 'Tyres', title: 'Too much negative camber, ' + axle,
+            detail: 'Inner edge ' + spread.toFixed(0) + ' °C hotter than outer (5–12 °C is typical).', evidence: out.tyres.note, severity: U.clamp((spread - 12) / 15, 0.2, 0.8), confidence: tConf });
+          else if (spread < 2) out.findings.push({ id: 'camber-little-' + axle, kind: 'camberTooLittle', axle, area: 'Tyres', title: 'Not enough negative camber, ' + axle,
+            detail: 'Inner edge only ' + spread.toFixed(0) + ' °C hotter than outer; the outer shoulder is overworked.', evidence: out.tyres.note, severity: U.clamp((5 - spread) / 12, 0.2, 0.8), confidence: tConf });
           if (crown > 5) out.findings.push({ id: 'press-high-' + axle, kind: 'pressureHigh', axle, area: 'Tyres', title: axle === 'front' ? 'Front tyre pressures look high' : 'Rear tyre pressures look high',
-            detail: 'The middle of the tread runs ' + crown.toFixed(0) + ' °C hotter than the average of the edges, a sign the tyre is crowning.', evidence: out.tyres.note, severity: 0.3, confidence: 'low' });
+            detail: 'Tread centre ' + crown.toFixed(0) + ' °C hotter than the edges.', evidence: out.tyres.note, severity: 0.3, confidence: 'low' });
           else if (crown < -7) out.findings.push({ id: 'press-low-' + axle, kind: 'pressureLow', axle, area: 'Tyres', title: axle === 'front' ? 'Front tyre pressures look low' : 'Rear tyre pressures look low',
-            detail: 'The middle of the tread runs ' + (-crown).toFixed(0) + ' °C cooler than the average of the edges.', evidence: out.tyres.note, severity: 0.3, confidence: 'low' });
+            detail: 'Tread centre ' + (-crown).toFixed(0) + ' °C cooler than the edges.', evidence: out.tyres.note, severity: 0.3, confidence: 'low' });
         }
         const fAvg = (rows[0].avg + rows[1].avg) / 2, rAvg = (rows[2].avg + rows[3].avg) / 2;
         out.tyres.frontMinusRear = fAvg - rAvg;
@@ -271,7 +272,7 @@
         for (const f of out.findings) {
           if (f.area !== 'Balance') continue;
           if ((f.kind === 'understeer' && fAvg - rAvg > 6) || (f.kind === 'oversteer' && rAvg - fAvg > 6)) {
-            f.evidence += ' Tyre temperatures agree: the ' + (f.kind === 'understeer' ? 'fronts' : 'rears') + ' run ' + Math.abs(fAvg - rAvg).toFixed(0) + ' °C hotter.';
+            f.evidence += ' Tyres agree: ' + (f.kind === 'understeer' ? 'fronts' : 'rears') + ' ' + Math.abs(fAvg - rAvg).toFixed(0) + ' °C hotter.';
             if (live && f.confidence === 'medium') f.confidence = 'high';
           }
         }
@@ -296,9 +297,9 @@
       if (have && cnt) {
         out.ride = { frontMinMm: fMin * 1000, rearMinMm: rMin * 1000, frontLowShare: fLow / cnt, rearLowShare: rLow / cnt };
         for (const [axle, share, mn] of [['front', fLow / cnt, fMin], ['rear', rLow / cnt, rMin]]) {
-          if (share > 0.004) out.findings.push({ id: 'bottom-' + axle, kind: 'bottoming', axle, area: 'Ride height', title: 'The ' + axle + ' of the car is close to the ground at speed',
-            detail: 'Logged ' + axle + ' ride height drops below 4 mm for ' + (share * 100).toFixed(1) + '% of the lap (minimum ' + (mn * 1000).toFixed(1) + ' mm). If the car feels like it skates or snaps over bumps and kerbs, it is touching down.',
-            evidence: 'Ride-height channel, ' + lapWord + '. Where the sim measures ride height differs by car, so treat this as a prompt to check.', severity: U.clamp(share / 0.03, 0.2, 0.8), confidence: 'low' });
+          if (share > 0.004) out.findings.push({ id: 'bottom-' + axle, kind: 'bottoming', axle, area: 'Ride height', title: (axle === 'rear' ? 'Rear' : 'Front') + ' close to the ground at speed',
+            detail: 'Under 4 mm for ' + (share * 100).toFixed(1) + '% of the lap (minimum ' + (mn * 1000).toFixed(1) + ' mm).',
+            evidence: 'Ride-height channel, ' + lapWord + '. The measuring point differs by car, so check before acting.', severity: U.clamp(share / 0.03, 0.2, 0.8), confidence: 'low' });
         }
       }
     }
@@ -309,8 +310,8 @@
       for (const g of grids) for (let w = 0; w < 4; w++) { const m = U.minMax(g.brakeTemp[w])[1]; if (m > peak[w]) peak[w] = m; }
       out.brakes = { peak };
       const fMax = Math.max(peak[0], peak[1]), rMax = Math.max(peak[2], peak[3]);
-      if (fMax > 850 || rMax > 850) out.findings.push({ id: 'brake-hot', kind: 'brakeHot', axle: fMax >= rMax ? 'front' : 'rear', area: 'Braking', title: 'Brake temperatures are very high',
-        detail: 'Peak disc temperature reached ' + Math.max(fMax, rMax).toFixed(0) + ' °C on the ' + (fMax >= rMax ? 'front' : 'rear') + ' axle.', evidence: 'Brake temperature channel, ' + lapWord + '. Safe limits depend on the disc material.', severity: 0.4, confidence: 'low' });
+      if (fMax > 850 || rMax > 850) out.findings.push({ id: 'brake-hot', kind: 'brakeHot', axle: fMax >= rMax ? 'front' : 'rear', area: 'Braking', title: 'Brakes very hot',
+        detail: 'Peak disc ' + Math.max(fMax, rMax).toFixed(0) + ' °C, ' + (fMax >= rMax ? 'front' : 'rear') + '.', evidence: 'Brake temperatures, ' + lapWord + '. Safe limits depend on the disc material.', severity: 0.4, confidence: 'low' });
     }
 
     /* ---------- gearing ---------- */
@@ -323,12 +324,12 @@
       }
       out.gearing = { topGear: top, limiterShare: tot ? lim / tot : 0 };
       if (out.gearing.limiterShare > 0.015) out.findings.push({ id: 'limiter', kind: 'limiter', area: 'Gearing', title: 'On the rev limiter in top gear',
-        detail: 'Flat out in gear ' + top + ' the engine sits within 1.5% of maximum revs for ' + (out.gearing.limiterShare * 100).toFixed(1) + '% of the lap, so top speed is capped by gearing.', evidence: 'RPM and gear channels, ' + lapWord + '.', severity: 0.5, confidence: conf(laps.length) });
+        detail: 'Within 1.5% of max revs in gear ' + top + ' for ' + (out.gearing.limiterShare * 100).toFixed(1) + '% of the lap.', evidence: 'RPM and gear, ' + lapWord + '.', severity: 0.5, confidence: conf(laps.length) });
     }
 
     out.findings.sort((a, b) => b.severity - a.severity);
     return out;
   }
 
-  STA.handling = { analyse, pickLaps, PHASES, BANDS, BAND_TEXT, PHASE_TEXT };
+  STA.handling = { analyse, pickLaps, PHASES, BANDS, BAND_TEXT, BAND_RANGE, PHASE_TEXT };
 })(typeof window !== 'undefined' ? window : globalThis);
