@@ -25,6 +25,7 @@
     slowBump: { name: 'slow bump damping', t: ['Stiffen the {a} slow bump damping', 'Soften the {a} slow bump damping'], by: '1–2 clicks', index: true, intStep: 1 },
     slowRebound: { name: 'slow rebound damping', t: ['Stiffen the {a} slow rebound damping', 'Soften the {a} slow rebound damping'], by: '1–2 clicks', index: true, intStep: 1 },
     fastBump: { name: 'fast bump damping', t: ['Stiffen the {a} fast bump damping', 'Soften the {a} fast bump damping'], by: '1–2 clicks', index: true, intStep: 1 },
+    fastRebound: { name: 'fast rebound damping', t: ['Stiffen the {a} fast rebound damping', 'Soften the {a} fast rebound damping'], by: '1–2 clicks', index: true, intStep: 1 },
     brakeBias: { name: 'brake bias', t: ['Move brake bias forward', 'Move brake bias rearward'], by: '0.5%', units: { '%': 0.5 } },
     brakePressure: { name: 'brake pressure', t: ['Raise brake pressure', 'Lower brake pressure'], by: '1 step', index: true },
     brakeDuct: { name: 'brake ducts', t: ['Close the {a} brake ducts', 'Open the {a} brake ducts'], by: '1 step', index: true },
@@ -186,6 +187,20 @@
     if (R.units && U.isNum(p.num) && R.units[unit] != null) change.delta = sign * m * R.units[unit];
     else if (R.index && p.index != null && p.max != null) change.steps = sign * m * (R.indexSteps || 1);
     else if (R.intStep && U.isNum(p.num) && !p.unit && /^\s*-?\d+\s*$/.test(p.raw)) change.delta = sign * m * R.intStep;
+    // Never step past what the car allows: shorten the step to land on the limit.
+    if (change.delta != null) {
+      let room = Infinity, bound = null;
+      for (const q of params) {
+        const b = sign > 0 ? q.hi : q.lo;
+        if (b == null || !U.isNum(q.num)) continue;
+        const r = Math.max(0, sign * (b - q.num));
+        if (r < room) { room = r; bound = b; }
+      }
+      if (room < Math.abs(change.delta) - 1e-9) {
+        change.delta = sign * room; change.cappedAt = bound;
+        change.text = change.text.replace(/ by .*$/, '') + ' to ' + +bound.toFixed(2) + (p.unit ? ' ' + p.unit : '') + ', the limit for this car';
+      }
+    }
     if (role === 'brakeBias' && change.delta == null && U.isNum(p.num) && p.num > 30 && p.num < 80) {
       change.text += ' (to about ' + (p.num + sign * m * 0.5).toFixed(1) + '% front)';
     }
@@ -229,12 +244,56 @@
     return { params: params.filter((p, i) => !stuck[i]), why: null };
   }
 
+  /* Settings that are outside what the car allows come first: nothing else matters until the
+     setup is legal. One suggestion per kind of setting and axle. */
+  function fixViolations(setup, suggestions, byKey) {
+    if (!STA.carLimits) return [];
+    const list = STA.carLimits.violations(setup), groups = new Map();
+    for (const v of list) {
+      if (!v.p.role || !ROLE[v.p.role]) continue;
+      const key = v.p.role + '|' + (v.p.axle || '');
+      const g = groups.get(key) || { key, role: v.p.role, axle: v.p.axle || null, side: v.side, bound: v.bound, src: v.src, params: [] };
+      g.params.push(v.p); groups.set(key, g);
+    }
+    for (const g of groups.values()) {
+      const dir = g.side === 'above' ? '-' : '+', unit = g.params[0].unit ? ' ' + g.params[0].unit : '', to = +g.bound.toFixed(2) + unit;
+      const title = titleFor(g.role, dir, g.axle) + ' to ' + to;
+      const s = {
+        key: g.key, blockKey: blockKey(g.role, g.axle, dir), role: g.role, axle: g.axle, dir, title, amount: '', fix: true,
+        paramIds: g.params.map((p) => p.id), current: SU().describe(g.params), change: { text: title, to: g.bound },
+        effect: 'Brings this setting back inside what the car allows (' + (g.side === 'above' ? 'no more than ' : 'no less than ') + to + ', ' + g.src + ').',
+        cost: 'Until it is inside the limit the car can fail technical inspection, so make this change before judging any other.',
+        reasons: [labelFor(g.role, g.axle) + ' is ' + g.side + ' the limit for this car'], findingIds: [],
+        confidence: /manual/.test(g.src) ? 'high' : 'medium', primary: true, insteadOf: null, score: 100,
+      };
+      byKey.set(g.key, s); suggestions.push(s);
+    }
+    return list;
+  }
+
+  /* What earlier sessions say about a change on this car (see learning.js), as a score
+     factor and a sentence. stats = { tried, helped, none, hurt }. */
+  function applyHistory(s, outcomes) {
+    const st = outcomes && outcomes.get(s.blockKey);
+    if (!st || !st.tried) return;
+    s.history = st;
+    s.score *= U.clamp(1 + 0.3 * (st.helped - st.hurt) - 0.15 * st.none, 0.4, 1.6);
+    if (st.helped === 0 && st.hurt + st.none >= 2) s.demoted = true;
+    const n = (k, word) => (k ? k + ' ' + word : null);
+    s.historyText = 'Tried ' + (st.tried === 1 ? 'once' : st.tried + ' times') + ' on this car before: ' + [n(st.helped, 'helped'), n(st.none, 'made no clear difference'), n(st.hurt, 'made it worse')].filter(Boolean).join(', ') + '.'
+      + (s.demoted ? ' It is listed after the others for that reason.' : st.helped > st.hurt + st.none ? ' It is ranked higher for that reason.' : '');
+  }
+
   /* findings + the setup on the car -> ordered suggestions.
-     opts.blocked: Set of "role|axle|dir" keys the driver has ruled out altogether.
-     opts.limits:  Map of "paramId|dir" -> { num, raw } limits the driver has reported. */
+     opts.blocked:  Set of "role|axle|dir" keys the driver has ruled out altogether.
+     opts.limits:   Map of "paramId|dir" -> { num, raw } limits the driver has reported.
+     opts.track:    track name, for limits that only apply at one circuit.
+     opts.outcomes: Map of "role|axle|dir" -> { tried, helped, none, hurt } from earlier sessions. */
   function advise(analysis, setup, opts) {
     const suggestions = [], skipped = [], byKey = new Map(), blocked = { blocked: (opts && opts.blocked) || null, limits: (opts && opts.limits) || null };
-    if (!setup) return { suggestions, skipped, note: 'This file has no setup stored in it, so advice is given as findings only. Load the setup to get specific changes.' };
+    if (!setup) return { suggestions, skipped, violations: [], car: null, note: 'This file has no setup stored in it, so advice is given as findings only. Load the setup to get specific changes.' };
+    const car = STA.carLimits ? STA.carLimits.apply(setup, opts && opts.track, blocked.limits) : null;
+    const violations = fixViolations(setup, suggestions, byKey);
 
     for (const f of analysis.findings) {
       const list = ruleFor(f);
@@ -253,13 +312,16 @@
           const key = opt.role + '|' + (axle || '');
           const existing = byKey.get(key);
           if (existing) {
+            if (existing.dir === opt.dir && existing.fix) { existing.reasons.push(f.title); existing.findingIds.push(f.id); continue; }
             if (existing.dir === opt.dir) { existing.reasons.push(f.title); existing.findingIds.push(f.id); existing.score += f.severity * 0.5; taken++; break; }
+            if (existing.fix) continue; // moving it back inside the limit is not optional
             existing.conflict = (existing.conflict || []).concat(f.title);
             continue; // wanted the other way round for another finding: look for a different route
           }
+          const change = buildChange(opt.role, opt.dir, r.params);
           const s = {
-            key, blockKey: blockKey(opt.role, axle, opt.dir), role: opt.role, axle, dir: opt.dir, title: titleFor(opt.role, opt.dir, axle),
-            amount: ROLE[opt.role].by, paramIds: r.params.map((p) => p.id), current: SU().describe(r.params), change: buildChange(opt.role, opt.dir, r.params),
+            key, blockKey: blockKey(opt.role, axle, opt.dir), role: opt.role, axle, dir: opt.dir, title: change.cappedAt != null ? change.text : titleFor(opt.role, opt.dir, axle),
+            amount: change.cappedAt != null ? '' : ROLE[opt.role].by, paramIds: r.params.map((p) => p.id), current: SU().describe(r.params), change,
             effect: opt.effect, cost: opt.cost, reasons: [f.title], findingIds: [f.id], confidence: f.confidence, primary: taken === 0,
             insteadOf: opt === tries[0] ? null : failedWhy, score: f.severity * (taken === 0 ? 1 : 0.6),
           };
@@ -269,10 +331,12 @@
       }
       if (unavailable.length) skipped.push({ finding: f.title, items: Array.from(new Set(unavailable)) });
     }
-    // First-choice fixes come before the alternatives for the same finding.
-    suggestions.sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0) || b.score - a.score);
+    for (const s of suggestions) if (!s.fix) applyHistory(s, opts && opts.outcomes);
+    // Limit fixes first, then first-choice fixes, then the alternatives; changes that have not worked on this car go last.
+    const tier = (s) => (s.fix ? 3 : s.demoted ? 0 : s.primary ? 2 : 1);
+    suggestions.sort((a, b) => tier(b) - tier(a) || b.score - a.score);
     suggestions.forEach((s, i) => { s.rank = i + 1; });
-    return { suggestions, skipped, note: '' };
+    return { suggestions, skipped, violations, car, note: '' };
   }
 
   /* Copy of the setup with the chosen suggestions written in. */

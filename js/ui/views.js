@@ -384,6 +384,8 @@
       ]));
     }
 
+    view().appendChild(reviewPanel(s));
+
     const list = h('div', { class: 'suggestions' }), blockedList = STA.library.blocked.list(s.meta.sim, s.meta.car), limitList = STA.library.limits.list(s.meta.sim, s.meta.car);
     if (!s.setup) list.appendChild(h('p', { class: 'empty', text: adv.note }));
     else if (!adv.suggestions.length) list.appendChild(h('p', { class: 'empty', text: an.findings.length ? 'None of the usual fixes for these findings can be made on this car\'s setup. The reasons are listed below.' : 'No changes suggested. Keep this setup and work on the laps themselves with the comparison tools.' }));
@@ -391,14 +393,15 @@
       list.appendChild(h('article', { class: 'suggestion' }, [
         h('label', { class: 'check big' }, [h('input', { type: 'checkbox', checked: !!checked[x.key], onchange: (ev) => { checked[x.key] = ev.target.checked; } }), h('span', { class: 'rank num', text: String(x.rank) })]),
         h('div', { class: 'suggestion-body' }, [
-          h('h3', { text: x.title + ' by ' + x.amount }),
+          h('h3', { text: x.title + (x.amount ? ' by ' + x.amount : '') }),
           h('p', { class: 'now' }, ['Now: ', h('b', { text: x.current })]),
           h('p', { text: x.effect + (x.cost ? ' Trade-off: ' + x.cost.charAt(0).toLowerCase() + x.cost.slice(1) : '') }),
           x.insteadOf ? h('p', { class: 'instead', text: 'Chosen as the next-best route because the usual fix is unavailable: ' + x.insteadOf + '.' }) : null,
+          x.historyText ? h('p', { class: 'history' + (x.demoted ? ' against' : ''), text: x.historyText }) : null,
           h('p', { class: 'evidence', text: 'Addresses: ' + x.reasons.join('; ') + '.' + (x.conflict ? ' Works against: ' + x.conflict.join('; ') + '.' : '') }),
         ]),
         h('div', { class: 'suggestion-side' }, [confTag(x.confidence),
-          h('button', { class: 'link', type: 'button', text: 'Not possible on this car', title: 'Records that this setting cannot go any further than its current value on this car, then looks for another way to get the same effect',
+          x.fix ? null : h('button', { class: 'link', type: 'button', text: 'Not possible on this car', title: 'Records that this setting cannot go any further than its current value on this car, then looks for another way to get the same effect',
             onclick: () => {
               // Remember the current value as the limit in this direction, so the change is offered again if the value later moves away from it.
               for (const p of s.setup.params) {
@@ -416,9 +419,6 @@
       list,
       adv.skipped.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Left out because this car cannot do them' }),
         h('ul', { class: 'plain' }, adv.skipped.map((k) => h('li', {}, [h('b', { text: k.finding + ': ' }), k.items.join('; ') + '.'])))]) : null,
-      limitList.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Limits you have set for the ' + s.meta.car }),
-        h('ul', { class: 'plain' }, limitList.map((e) => h('li', {}, [h('b', { text: e.label + ': ' }), 'cannot go ' + (e.dir === '-' ? 'below ' : 'above ') + e.raw + ' ',
-          h('button', { class: 'link', type: 'button', text: 'Remove limit', onclick: () => { STA.library.limits.remove(s.meta.sim, s.meta.car, e.paramId, e.dir); ui().adviceChecked = null; render(); } })])))]) : null,
       blockedList.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Changes you marked as not possible on the ' + s.meta.car }),
         h('ul', { class: 'plain' }, blockedList.map((key) => { const [role, axle, dir] = key.split('|'); return h('li', {}, [STA.advisor.titleFor(role, dir, axle || null) + ' ',
           h('button', { class: 'link', type: 'button', text: 'Allow again', onclick: () => { STA.library.blocked.remove(s.meta.sim, s.meta.car, key); ui().adviceChecked = null; render(); } })]); }))]) : null,
@@ -433,6 +433,118 @@
         A().say('ok', 'Saved "' + prop.name + '". It is shown next to the setup you drove.');
         A().renderAll();
       } })]) : null,
+    ]));
+    if (s.setup) view().appendChild(limitsPanel(s, adv));
+  }
+
+  /* Did the change made before this session do what it was meant to? */
+  function reviewPanel(s) {
+    const st = A().state, rv = STA.learning.review(st.summaries, st.setups, s);
+    const head = h('h2', { text: 'Did the last change work?' });
+    if (!rv) return h('section', { class: 'panel' }, [head, h('p', { class: 'empty', text: 'Nothing to compare yet. Once two sessions with this car at this track are in the library, the app compares them here.' })]);
+    if (rv.first) return h('section', { class: 'panel' }, [head, h('p', { class: 'empty', text: 'This is the earliest session with this car at this track in the library. Change the setup, drive again and load that run: the app will then show whether each change did what it was meant to, and use the result to re-order its suggestions.' })]);
+    const lapLine = (b, a) => 'Typical lap ' + U.fmtLap(b.medianLap || b.bestLap) + ' before, ' + U.fmtLap(a.medianLap || a.bestLap) + ' in this session.';
+    if (rv.sameSetup) return h('section', { class: 'panel' }, [head, h('p', { class: 'lead', text: 'This session used the same setup as your previous one here (' + rv.before.fileName + '), so there is no setup change to judge. ' + lapLine(rv.before, rv.after) + ' Any difference is driving and conditions.' })]);
+    const verdict = { helped: 'Helped', none: 'No clear difference', hurt: 'Made it worse' };
+    const rows = rv.changes.map((c) => ({
+      change: c.title, vals: c.from + ' → ' + c.to,
+      meant: c.targets.length ? c.targets.map((t) => t.title).join('; ') : 'No finding in the earlier session called for this',
+      happened: c.targets.length ? c.targets.map((t) => t.text).join('; ') : 'Judged on lap time only',
+      verdict: h('span', { class: 'verdict ' + c.verdict, text: c.overshot ? 'Helped, but went too far' : verdict[c.verdict] }),
+    }));
+    const failed = rv.changes.filter((c) => c.targets.length && c.verdict !== 'helped'), over = rv.changes.filter((c) => c.overshot);
+    const lap = rv.lap, lapText = lap.rel == null ? '' : ' ' + lapLine(rv.before, rv.after) + ' That is ' + (lap.word === 'same' ? 'within normal variation for these laps.' : Math.abs(lap.rel * 100).toFixed(2) + '% ' + lap.word + '.');
+    return h('section', { class: 'panel' }, [
+      head,
+      h('p', { class: 'lead', text: 'Compared with your previous session here (' + rv.before.fileName + ', setup "' + rv.setupBefore.name + '").' + lapText }),
+      rows.length ? table([{ key: 'change', label: 'What you changed' }, { key: 'vals', label: 'From → to' }, { key: 'meant', label: 'Meant to fix' }, { key: 'happened', label: 'What happened' }, { key: 'verdict', label: 'Result' }], rows)
+        : h('p', { class: 'empty', text: 'The setups differ only in settings the app does not judge (fuel, gearing, cooling and similar).' }),
+      over.length ? h('p', { class: 'instead', text: 'Went too far: ' + over.map((c) => c.title.toLowerCase()).join('; ') + '. The direction was right, so go back half the step.' }) : null,
+      failed.length ? h('div', { class: 'skipped' }, [
+        h('h3', { text: 'Where the change did not do what was expected' }),
+        h('p', { text: 'The suggestions below now rank these changes lower on this car and bring the next alternative forward. Before changing the car again, try the driver side of the same problem:' }),
+        h('ul', { class: 'plain' }, failed.reduce((acc, c) => acc.concat(STA.technique.forTargets(c.targets).slice(0, 2).map((tip) => h('li', {}, [h('b', { text: c.targets[0].title + ': ' }), tip]))), [])),
+        h('button', { class: 'link', type: 'button', text: 'Open driving technique', onclick: () => { st.tab = 'technique'; A().renderAll(); } }),
+      ]) : null,
+      h('p', { class: 'hint', text: (rv.changes.length > 1 ? rv.changes.length + ' settings changed at once, so the app cannot tell which of them did what; change one or two at a time for a clearer answer. ' : '') + 'Lap time also moves with track temperature, fuel, tyre wear and practice. One comparison is weak evidence; a change is only moved to the bottom of the list after two results against it.' }),
+    ]);
+  }
+
+  /* Known limits for the car, and a way to add or correct one. */
+  function limitsPanel(s, adv) {
+    const sim = s.meta.sim, car = s.meta.car, mine = STA.library.limits.list(sim, car), f = ui().limitForm || (ui().limitForm = { dir: '+', value: '' });
+    const again = () => { ui().adviceChecked = null; render(); };
+    const groups = new Map();
+    for (const p of s.setup.params) {
+      if (p.lo == null && p.hi == null) continue;
+      if ((p.loSrc || p.hiSrc) === 'set by you' && (p.lo == null || p.loSrc === 'set by you') && (p.hi == null || p.hiSrc === 'set by you')) continue;
+      const unit = p.unit ? ' ' + p.unit : '', bits = [];
+      if (p.lo != null && p.loSrc !== 'set by you') bits.push('no less than ' + +p.lo.toFixed(2) + unit);
+      if (p.hi != null && p.hiSrc !== 'set by you') bits.push('no more than ' + +p.hi.toFixed(2) + unit);
+      const label = p.role && STA.advisor.ROLE[p.role] ? STA.advisor.labelFor(p.role, p.axle) : p.label;
+      const src = (p.loSrc !== 'set by you' && p.loSrc) || p.hiSrc, key = label + '|' + bits.join(', ') + '|' + src;
+      if (!groups.has(key)) groups.set(key, { label, text: bits.join(', '), src });
+    }
+    const choices = s.setup.params.filter((p) => p.adjustable && !p.derived && U.isNum(p.num));
+    if (!f.id || !choices.some((p) => p.id === f.id)) f.id = (choices.find((p) => p.role === 'rideHeight') || choices[0] || {}).id;
+    const add = () => {
+      const v = parseFloat(f.value), p0 = choices.find((p) => p.id === f.id);
+      if (!p0 || !U.isNum(v)) return A().say('warn', 'Enter the limit as a number.');
+      // The same setting on the other side of the car gets the same limit.
+      for (const p of choices) if (p === p0 || (p.role && p.role === p0.role && p.axle === p0.axle && p.label === p0.label && p.unit === p0.unit)) {
+        STA.library.limits.add(sim, car, { paramId: p.id, dir: f.dir, num: v, raw: v + (p.unit ? ' ' + p.unit : ''), label: p.section + ' / ' + p.label });
+      }
+      f.value = ''; again();
+    };
+    return h('section', { class: 'panel' }, [
+      h('h2', { text: 'Limits for the ' + car }),
+      sim === 'lmu' ? h('p', { class: 'lead', text: 'Le Mans Ultimate stores the allowed range of every setting in the recording, so the advice already stops at the ends of each range for any car. Add a limit below only for a rule the sim does not enforce.' })
+        : adv.car ? h('p', { class: 'lead' }, ['Built-in limits for this car come from ', h('a', { href: adv.car.url, target: '_blank', rel: 'noopener', text: 'iRacing\'s manual for the ' + adv.car.name }), ' unless marked otherwise. The manuals do not list every limit and iRacing can change a car between seasons, so correct or add to them below. A limit you enter replaces the built-in one for that setting.'])
+        : h('p', { class: 'lead', text: 'There are no built-in limits for this car. The app still stops at values that say they cannot go further (a disconnected bar, a setting at zero). Add the limits you know below and they are used from then on.' }),
+      groups.size ? h('ul', { class: 'plain' }, Array.from(groups.values()).map((g) => h('li', {}, [h('b', { text: g.label + ': ' }), g.text + ' (' + g.src.replace(/^from the /, '') + ')']))) : null,
+      mine.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Limits you have set' }),
+        h('ul', { class: 'plain' }, mine.map((e) => h('li', {}, [h('b', { text: e.label + ': ' }), 'cannot go ' + (e.dir === '-' ? 'below ' : 'above ') + e.raw + ' ',
+          h('button', { class: 'link', type: 'button', text: 'Remove limit', onclick: () => { STA.library.limits.remove(sim, car, e.paramId, e.dir); again(); } })])))]) : null,
+      choices.length ? h('div', { class: 'form' }, [
+        h('label', { class: 'wide' }, ['Setting', h('select', { onchange: (ev) => { f.id = ev.target.value; } }, choices.map((p) => h('option', { value: p.id, selected: p.id === f.id, text: p.section + ' / ' + p.label + ' (now ' + p.raw + ')' })))]),
+        h('label', {}, ['Rule', h('select', { onchange: (ev) => { f.dir = ev.target.value; } }, [h('option', { value: '+', selected: f.dir === '+', text: 'Cannot go above' }), h('option', { value: '-', selected: f.dir === '-', text: 'Cannot go below' })])]),
+        h('label', {}, ['Value', h('input', { type: 'number', step: 'any', class: 'text', value: f.value, 'aria-label': 'Limit value', oninput: (ev) => { f.value = ev.target.value; }, onkeydown: (ev) => { if (ev.key === 'Enter') add(); } })]),
+        h('button', { class: 'btn ghost', type: 'button', text: 'Add limit', onclick: add }),
+      ]) : null,
+    ]);
+  }
+
+  /* ---------- Driving technique ---------- */
+
+  function renderTechnique() {
+    const s = A().active();
+    if (!s) return view().appendChild(empty('Driving technique', 'Load a telemetry file. The app compares your own laps with each other and shows where the driving, not the car, has time in it.'));
+    if (!s.refLap) return view().appendChild(empty('No complete lap', 'Driving advice needs at least one complete lap. This recording does not contain one.'));
+    const { an } = A().analysisFor(s), tech = A().techFor(s);
+    const item = (x) => h('article', { class: 'finding' }, [
+      h('div', { class: 'finding-head' }, [h('span', { class: 'area', text: x.area }), h('h3', { text: x.title }), confTag(x.confidence)]),
+      h('p', { text: x.detail }), h('p', { class: 'how' }, [h('b', { text: 'What to try: ' }), x.how]), h('p', { class: 'evidence', text: x.evidence }),
+    ]);
+    view().appendChild(h('section', { class: 'panel' }, [
+      h('h2', { text: 'Time in your own driving' }),
+      h('p', { class: 'lead', text: tech.laps.length ? 'Based on ' + (tech.laps.length === 1 ? 'lap ' : 'laps ') + tech.laps.join(', ') + ' of ' + s.meta.fileName + ', the timed laps within 5% of your best. Everything here is measured against your own laps, not against another driver.' : '' }),
+      tech.items.length ? h('div', { class: 'findings' }, tech.items.map(item))
+        : h('p', { class: 'empty', text: tech.laps.length < 2 ? 'With one timed lap there is nothing to compare it with. Drive three to five clean laps and load the file again.' : 'Nothing stands out: your laps repeat closely, and the pedal traces show no habitual coasting, slow brake build-up or hesitant throttle.' }),
+      tech.notes.length ? h('ul', { class: 'notes' }, tech.notes.map((n) => h('li', { text: n }))) : null,
+    ]));
+    const withTips = an.findings.map((f) => ({ f, tips: STA.technique.forFinding(f) })).filter((x) => x.tips.length);
+    view().appendChild(h('section', { class: 'panel' }, [
+      h('h2', { text: 'Driving around what the car is doing' }),
+      h('p', { class: 'lead', text: 'Each handling finding from the setup advice, with what you can do about it from the seat. Use these when a setup change did not do what was expected, when the setting you need is already at its limit, or in a fixed-setup series.' }),
+      withTips.length ? h('div', { class: 'findings' }, withTips.map(({ f, tips }) => {
+        const key = f.kind + '|' + f.phase, seen = tech.items.filter((x) => x.relates === key);
+        return h('article', { class: 'finding' }, [
+          h('div', { class: 'finding-head' }, [h('span', { class: 'area', text: f.area }), h('h3', { text: f.title }), confTag(f.confidence)]),
+          h('ul', { class: 'plain' }, tips.map((t) => h('li', { text: t }))),
+          seen.length ? h('p', { class: 'how' }, [h('b', { text: 'Measured in your laps: ' }), seen.map((x) => x.title.charAt(0).toLowerCase() + x.title.slice(1)).join('; ') + '.']) : null,
+        ]);
+      })) : h('p', { class: 'empty', text: 'The setup advice found no handling problem in these laps, so there is nothing to drive around.' }),
+      h('p', { class: 'hint', text: 'Confidence in these tips: medium. They are standard race-driving practice matched to what the telemetry shows, not a model of this car. Try one at a time, like a setup change.' }),
     ]));
   }
 
@@ -621,7 +733,7 @@
   function render() {
     clear();
     const tab = STA.app.state.tab;
-    ({ compare: renderCompare, map: renderMap, tables: renderTables, advice: renderAdvice, baseline: renderBaseline, setups: renderSetups }[tab] || renderCompare)();
+    ({ compare: renderCompare, map: renderMap, tables: renderTables, advice: renderAdvice, technique: renderTechnique, baseline: renderBaseline, setups: renderSetups }[tab] || renderCompare)();
   }
 
   /* Pick one overlaid lap out in whatever charts are on screen (null clears it). */

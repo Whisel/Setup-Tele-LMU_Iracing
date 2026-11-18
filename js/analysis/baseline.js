@@ -88,6 +88,9 @@
     if (pref.balance === 'stable') { want('arb', 'rear', -1, 'You asked for a stable car'); want('brakeBias', null, 1, 'You asked for a stable car'); }
     if (pref.balance === 'lively') { want('arb', 'front', -1, 'You asked for a car that rotates'); want('brakeBias', null, -1, 'You asked for a car that rotates'); }
 
+    // Known limits for this car, so no step below goes past them.
+    if (STA.carLimits) STA.carLimits.apply(reference, opts.track || reference.track, opts.limits || null);
+
     // Balance problems seen repeatedly with this car in earlier sessions.
     const usedHistory = [];
     for (const tnd of opts.tendencies || []) {
@@ -135,6 +138,15 @@
         done = true; break;
       }
       if (!done) notApplied.push({ label: STA.advisor.labelFor(e.role, e.axle), why, reason: (firstWhy || 'not adjustable on this car').replace(/^.*?\((.*)\)$/, '$1') });
+    }
+    // A starting setup that is itself outside the limits is pulled back inside them.
+    if (STA.carLimits) {
+      STA.carLimits.apply(setup, opts.track || reference.track, opts.limits || null);
+      for (const v of STA.carLimits.violations(setup)) {
+        const from = v.p.raw;
+        STA.setup.applyChange(v.p, { to: v.bound, text: 'Moved inside the limit for this car', why: v.src });
+        changes.push({ label: v.p.section + ' / ' + v.p.label, from, to: v.p.raw, text: 'Moved inside the limit for this car', why: 'The starting value was ' + v.side + ' what this car allows (' + v.src + ')' });
+      }
     }
     STA.setup.refresh(setup);
     return { setup, changes, notApplied, track, usedHistory };

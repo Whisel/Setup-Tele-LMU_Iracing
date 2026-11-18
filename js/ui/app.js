@@ -8,7 +8,7 @@
 
   const TABS = [
     ['compare', 'Lap comparison'], ['map', 'Track map'], ['tables', 'Telemetry tables'],
-    ['advice', 'Setup advice'], ['baseline', 'Baseline setup'], ['setups', 'Setups and differences'],
+    ['advice', 'Setup advice'], ['technique', 'Driving technique'], ['baseline', 'Baseline setup'], ['setups', 'Setups and differences'],
   ];
 
   /* Laps being overlaid: any number, from any loaded session.
@@ -16,7 +16,7 @@
        refSlot  = slot of the reference lap, the one every time difference is measured against */
   const state = {
     sessions: [], activeId: null, overlay: [], refSlot: null, tab: 'compare',
-    speedUnit: 'kmh', setups: [], summaries: [], analysis: new Map(), messages: [], ui: {},
+    speedUnit: 'kmh', setups: [], summaries: [], analysis: new Map(), tech: new Map(), messages: [], ui: {},
   };
   const SLOT_COLOURS = 8; // distinct colours available; laps beyond that are drawn in a neutral grey
   const letterOf = (slot) => (slot < 26 ? String.fromCharCode(65 + slot) : 'L' + (slot + 1));
@@ -92,7 +92,15 @@
     if (!state.analysis.has(session.id)) state.analysis.set(session.id, STA.handling.analyse(session));
     const an = state.analysis.get(session.id);
     const sim = session.meta.sim, car = session.meta.car;
-    return { an, adv: STA.advisor.advise(an, session.setup, { blocked: STA.library.blocked.set(sim, car), limits: STA.library.limits.map(sim, car) }) };
+    // What earlier sessions with this car say about each kind of change.
+    const outcomes = STA.learning.outcomes(state.summaries, state.setups, { sim, car });
+    return { an, outcomes, adv: STA.advisor.advise(an, session.setup, { blocked: STA.library.blocked.set(sim, car), limits: STA.library.limits.map(sim, car), track: session.trackName, outcomes }) };
+  }
+
+  /* Driving-technique analysis, cached per session. */
+  function techFor(session) {
+    if (!state.tech.has(session.id)) state.tech.set(session.id, STA.technique.analyse(session, analysisFor(session).an));
+    return state.tech.get(session.id);
   }
 
   function say(kind, text) {
@@ -178,19 +186,18 @@
     const dup = state.sessions.findIndex((s) => s.id === session.id);
     if (dup >= 0) state.sessions.splice(dup, 1);
     state.sessions.push(session);
-    state.analysis.delete(session.id);
+    state.analysis.delete(session.id); state.tech.delete(session.id);
     activate(session.id, true);
     for (const w of session.warnings) say('warn', session.meta.fileName + ': ' + w);
     for (const n of session.notes || []) say('info', session.meta.fileName + ': ' + n);
 
     // Remember the setup and a summary so later visits can find "what was I running here?"
     const summary = STA.session.summaryOf(session);
-    if (session.refLap) {
-      const { an } = analysisFor(session);
-      summary.tendencies = an.findings.map((f) => ({ id: f.id, kind: f.kind, phase: f.phase, band: f.band, axle: f.axle, title: f.title }));
-    }
+    // The summary also records how the car behaved, so the next session can be judged against it.
+    if (session.refLap) Object.assign(summary, STA.learning.snapshot(session, analysisFor(session).an, techFor(session)));
     await STA.library.saveSession(summary);
     if (session.setup) await STA.library.recordUse(session.setup, summary);
+    await refreshLibrary();
   }
 
   function activate(id, resetLaps) {
@@ -394,5 +401,5 @@
     renderAll();
   }
 
-  STA.app = { start, state, h, pick, active, sessionById, overlayLaps, addLap, removeLap, setRef, clearLaps, letterOf, colourVarOf, analysisFor, speed, speedUnit, simName, dateText, say, addFiles, scanFolder, refreshLibrary, renderAll, renderLapbar, renderLaps, activate };
+  STA.app = { start, state, h, pick, active, sessionById, overlayLaps, addLap, removeLap, setRef, clearLaps, letterOf, colourVarOf, analysisFor, techFor, speed, speedUnit, simName, dateText, say, addFiles, scanFolder, refreshLibrary, renderAll, renderLapbar, renderLaps, activate };
 })(typeof window !== 'undefined' ? window : globalThis);

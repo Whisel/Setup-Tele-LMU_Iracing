@@ -58,6 +58,9 @@
     ['fastBump', /hscomp|highspeedcomp|fastbump|hs comp|hsbump/],
     ['slowRebound', /lsrbd|lsreb|lowspeedreb|slowrebound|ls rbd|ls reb/],
     ['fastRebound', /hsrbd|hsreb|highspeedreb|fastrebound|hs rbd|hs reb/],
+    // Cars with a single bump and a single rebound adjuster: treated as the slow-speed ones.
+    ['slowBump', /bumpstiffness|compdamping|compression|\bbump\b/],
+    ['slowRebound', /reboundstiffness|rbddamping|rebound/],
     ['diffPreload', /preload/],
     ['diffCoast', /diffcoast|coastramp|diffentry|coastlock|differential\/entry|coast/],
     ['diffPower', /diffpower|powerramp|diffexit|powerlock|differential\/(middle|highspeed)|drivelock|clutchfriction/],
@@ -321,9 +324,14 @@
       const total = idx - from;
       p.wasIndex = from; p.index = idx; p.num = null;
       p.raw = total === 0 ? before : Math.abs(total) + (Math.abs(total) === 1 ? ' step ' : ' steps ') + (total > 0 ? 'up' : 'down') + ' from ' + before;
-    } else if (U.isNum(change.delta) && U.isNum(p.num)) {
-      const dec = (String(p.raw).match(/\.(\d+)/) || [0, ''])[1].length || (Math.abs(change.delta) % 1 ? 1 : 0);
-      const v = p.num + change.delta;
+    } else if ((U.isNum(change.delta) || U.isNum(change.to)) && U.isNum(p.num)) {
+      // 'to' sets a value outright (used to bring a setting back inside the car's limits).
+      let v = U.isNum(change.to) ? change.to : p.num + change.delta;
+      const up = v > p.num;
+      if (up && p.hi != null && p.num <= p.hi) v = Math.min(v, p.hi);
+      if (!up && p.lo != null && p.num >= p.lo) v = Math.max(v, p.lo);
+      if (Math.abs(v - p.num) < 1e-9) return { moved: 0, atLimit: true };
+      const dec = (String(p.raw).match(/\.(\d+)/) || [0, ''])[1].length || (Math.abs(v - p.num) % 1 > 1e-9 ? 1 : 0);
       p.raw = (/^\s*\+/.test(before) && v > 0 ? '+' : '') + v.toFixed(dec) + (p.unit ? (p.unit === '%' ? '%' : ' ' + p.unit) : '');
       p.num = v; p.index = null; // the sim's step number for the new value is not known
     } else {
@@ -348,6 +356,12 @@
       return (dir === '+' ? p.index >= p.max : p.index <= p.min) ? 'already at the end of its range (' + p.raw + ')' : null;
     }
     const raw = String(p.was != null ? p.was : p.raw).trim();
+    // Known range for this car (STA.carLimits writes lo/hi onto the setting, in its own unit).
+    if (U.isNum(p.num)) {
+      const eps = 1e-6 + Math.abs(p.num) * 1e-4, unit = p.unit ? ' ' + p.unit : '';
+      if (dir === '+' && p.hi != null && p.num >= p.hi - eps) return 'cannot go above ' + +p.hi.toFixed(2) + unit + ' on this car, ' + p.hiSrc;
+      if (dir === '-' && p.lo != null && p.num <= p.lo + eps) return 'cannot go below ' + +p.lo.toFixed(2) + unit + ' on this car, ' + p.loSrc;
+    }
     const L = learned && learned.get(p.id + '|' + dir);
     if (L) {
       if (U.isNum(L.num) && U.isNum(p.num)) { if (dir === '-' ? p.num <= L.num : p.num >= L.num) return 'cannot go ' + (dir === '-' ? 'below ' : 'above ') + L.raw + ' on this car'; }

@@ -12,7 +12,8 @@ It runs entirely on your computer. Nothing is uploaded.
 | Lap comparison | Any number of laps overlaid: speed, pedals, steering, gear, RPM, G forces and each lap's running time difference to the reference lap, with every driven line on a map and a corner-by-corner table. Laps can come from different sessions at the same track. |
 | Track map | The track drawn from your own position data, with the line coloured by speed, by throttle and brake, or by where each lap gains time. |
 | Telemetry tables | Lap table, corner table, samples every 5–100 m, and tyre, brake and ride-height readings. Every table saves as CSV. |
-| Setup advice | Findings from your fastest laps (balance by corner phase and speed, traction, locking, tyres, ride height, brakes, gearing), each with a confidence level, turned into specific changes to the setup that was on the car. |
+| Setup advice | Findings from your fastest laps (balance by corner phase and speed, traction, locking, tyres, ride height, brakes, gearing), each with a confidence level, turned into specific changes to the setup that was on the car. Changes stay inside the car's known limits, and the tab shows whether your last setup change did what it was meant to. |
+| Driving technique | Where your own best sections add up to a faster lap, which corners vary most, coasting, how you apply and release the brake and pick up the throttle, and how to drive around each handling problem the setup advice found. |
 | Baseline setup | A starting setup for a car and track. Before proposing anything it checks whether you already have a setup in progress for that car and track, and tells you to carry on from it if so. |
 | Setups and differences | Every setup the app has seen, and a side-by-side table of how any two or more differ. |
 
@@ -98,6 +99,92 @@ setup that was on the car.
   has 4, a reduction is offered again. Limits can be removed from the list under the
   suggestions, and they are included in the library export.
 
+## Car limits
+
+A suggestion is never allowed to take a setting past what the car allows, and a setting
+that is already outside the limit is the first thing the app tells you to fix.
+
+- **Le Mans Ultimate.** Every recording carries the allowed range of every setting, so
+  limits are known for any LMU car with nothing to maintain.
+- **iRacing.** iRacing does not put ranges in its telemetry. The app carries a table
+  (`js/data/car-limits.js`) of limits taken from
+  [iRacing's per-car user manuals](https://www.iracing.com/resources/user-manuals/):
+  legal ride-height windows, spring-rate ranges, and the click ranges of anti-roll bars,
+  dampers, traction control, ABS and wings, for 43 cars. Each entry links the manual it
+  came from, and the Setup advice tab shows the limits in force for the loaded car.
+  A limit that only applies at one circuit (the 70 mm minimum ride height for GT3 cars on
+  the Nürburgring Nordschleife) is only applied there.
+- **Reported by a driver.** A limit that is real but not in a manual is marked as such.
+  The Super Formula Lights front ride height (no more than 20 mm) is one.
+- **Your own limits.** Under "Limits for the …" on the Setup advice tab, pick a setting,
+  choose "cannot go above" or "cannot go below" and enter the value. It is stored per car,
+  applies to the same setting on both sides of the car, takes effect immediately in the
+  advice and the baseline, and replaces a built-in limit for that setting if the built-in
+  one is wrong or out of date.
+
+When the usual step would cross a limit, the step is shortened to land on it ("Raise the
+front ride height to 20 mm, the limit for this car"). At the limit the change is not
+offered and the app uses the next route to the same effect.
+
+The manuals are uneven: some state every range, some state none, and iRacing can change a
+car at any season build. A car or setting with no entry simply has no known limit. To add
+one permanently, add a line to `js/data/car-limits.js`; the format is described at the
+top of that file.
+
+## Driving technique
+
+The Driving technique tab is about the driver, not the car. It has two parts.
+
+**Measured from your laps** (timed laps within 5% of your best):
+
+- **Your best sections.** Each lap is cut into one section per corner. The app adds up
+  your quickest run through each section, shows how much quicker that is than your best
+  lap, and for the biggest losses says what the quicker lap did differently (braked later,
+  carried more speed, reached full throttle earlier).
+- **Repeatability.** Which corners vary most from lap to lap. Until laps repeat, a setup
+  change worth a tenth cannot be told apart from normal variation.
+- **Coasting.** Time on neither pedal, and where.
+- **Braking.** How long you take to reach peak pressure in big stops, whether you finish
+  braking before turning in, and whether you release the pedal abruptly.
+- **Throttle.** Picking it up early and waiting on part throttle, and going back off it
+  after applying it.
+- **Steering.** Repeated corrections inside a corner.
+
+**Driving around what the car is doing.** For every handling finding there is a short list
+of what to try from the seat: for entry understeer, slow the car more and trail the brake;
+for exit oversteer, squeeze the throttle and take a gear higher; and so on. Use these when
+a setup change did not do what was expected, when the setting you need is at its limit, or
+in a fixed-setup series.
+
+## Learning from your sessions
+
+Every session you load leaves a short record in the library: the balance in each corner
+phase, the findings, typical lap time and which setup was on the car. No raw telemetry is
+kept. The app uses those records in three ways.
+
+- **Did the last change work?** When the session before this one (same car, same track)
+  used a different setup, the app lists what you changed, what each change is normally
+  meant to fix, how that measure moved, and a result: helped, no clear difference, made it
+  worse, or helped but went too far. Where a change did not help it shows the driving
+  technique for the same problem.
+- **Suggestions re-ordered by results on this car.** Each kind of change (for example
+  "soften the front anti-roll bar") keeps a tally per car across all tracks. Changes that
+  have helped move up. A change with two results against it and none for it is moved to
+  the bottom, so the next alternative leads. Each suggestion shows its record.
+- **Recurring problems shape the baseline.** A balance problem seen in two or more earlier
+  sessions with a car is leaned against when a new baseline is built.
+
+The more before-and-after pairs the library holds, the more the order of suggestions
+reflects your car and your driving instead of general rules. To get clean evidence, change
+one or two things at a time and keep loading the files, including runs where nothing
+changed.
+
+What this cannot do: lap time also moves with track temperature, fuel, tyre wear and
+practice, so one comparison is weak evidence, and when several settings change at once the
+app cannot tell which one did what. It says so on the page when that applies. The learning
+re-orders and annotates the general rules; it does not invent new rules or learn how big a
+step your car needs.
+
 Each finding carries a confidence level:
 
 - **High**: measured directly on three or more laps (for example wheel speeds), or a
@@ -154,8 +241,13 @@ browser or computer.
 - **Mislabelled channels.** LMU stores lateral and longitudinal G under each other's
   names. The app checks both against speed and the driven path and swaps them when needed,
   and tells you when it has.
-- **iRacing setting ranges are not known to the app.** See "Not possible on this car"
-  above.
+- **iRacing limits are only as complete as the manuals.** The built-in table was read from
+  iRacing's manuals in November 2026 and covers 43 cars, with ride-height limits for 18 of
+  them. It has not been checked against the garage screen of each car. If the app and the
+  garage disagree, the garage is right: enter the real limit on the Setup advice tab.
+- **Driving advice uses general thresholds** (for example, more than 0.3 s to reach peak
+  brake pressure counts as slow). They are not tuned per car, and a car without ABS or
+  with heavy downforce is driven differently from a road-based one.
 - **The advice is general.** It has no per-car targets for tyre pressures, temperatures or
   ride heights, and it cannot tell you the lap time a change is worth.
 
@@ -181,7 +273,9 @@ the app without your own data:
     js/io/lmu.js          LMU .duckdb reader
     js/model/session.js   laps, distance grids, track map, corners
     js/model/setup.js     setups from both sims, roles, differences
-    js/analysis/          handling analysis, advice rules, baseline
+    js/data/car-limits.js per-car limits for iRacing, with their sources
+    js/analysis/          handling analysis, advice rules, driving technique,
+                          learning from earlier sessions, baseline
     js/store/library.js   browser-side setup and session library
     js/ui/                charts, DuckDB loader, app shell and tabs
     vendor/duckdb/        bundled DuckDB browser client (see its README)

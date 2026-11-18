@@ -72,7 +72,7 @@ DriverInfo:
  Drivers:
  - CarIdx: 0
    UserName: Test Driver
-   CarScreenName: Test GT3
+   CarScreenName: ${(extra && extra.car) || 'Test GT3'}
    CarClassShortName: GT3
  - CarIdx: 1
    UserName: Pace Car
