@@ -17,6 +17,14 @@ It runs entirely on your computer. Nothing is uploaded.
 | Baseline setup | A starting setup for a car and track. Before proposing anything it checks whether you already have a setup in progress for that car and track, and tells you to carry on from it if so. |
 | Setups and differences | Every setup the app has seen, and a side-by-side table of how any two or more differ. |
 
+## Sessions in recorded order
+
+Loaded sessions are listed in the order they were driven, earliest first, whatever order
+the files were added in. They are grouped under the day, and each card leads with the
+time the recording started (in your computer's time zone), followed by the track, car,
+file, setup name and best lap. The same time appears on each overlaid lap and in "Did the
+last change work?", so it is clear which run is which.
+
 ## Overlaying laps
 
 Each lap in the lap list has a **+** button; press it on as many laps as you like, or use

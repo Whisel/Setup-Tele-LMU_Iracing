@@ -75,6 +75,12 @@
   const speedUnit = () => (state.speedUnit === 'mph' ? 'mph' : 'km/h');
   const simName = (s) => (s === 'iracing' ? 'iRacing' : s === 'lmu' ? 'Le Mans Ultimate' : s);
   const dateText = (ms) => (ms ? new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '');
+  // When a session was recorded, in the viewer's own time zone.
+  const dayText = (ms) => (ms ? new Date(ms).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }) : 'Date unknown');
+  const timeText = (ms) => (ms ? new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '');
+  const whenText = (ms) => (ms ? new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ', ' + timeText(ms) : '');
+  // LMU runs have no setup name of their own, so the app names them after the recording time; no need to show that twice.
+  const namedSetup = (s) => (s.setup && !/^Driven \d{4}-/.test(s.setup.name) ? s.setup.name : '');
   const sessionById = (id) => state.sessions.find((s) => s.id === id) || null;
   const active = () => sessionById(state.activeId);
 
@@ -186,6 +192,8 @@
     const dup = state.sessions.findIndex((s) => s.id === session.id);
     if (dup >= 0) state.sessions.splice(dup, 1);
     state.sessions.push(session);
+    // Kept in the order the runs were driven, earliest first, whatever order the files were added in.
+    state.sessions.sort((a, b) => (a.meta.recordedAt || 0) - (b.meta.recordedAt || 0) || String(a.meta.fileName).localeCompare(String(b.meta.fileName)));
     state.analysis.delete(session.id); state.tech.delete(session.id);
     activate(session.id, true);
     for (const w of session.warnings) say('warn', session.meta.fileName + ': ' + w);
@@ -276,16 +284,18 @@
   function renderSessions() {
     const box = $('session-list'); box.innerHTML = '';
     if (!state.sessions.length) { box.appendChild(h('p', { class: 'empty', text: 'No telemetry loaded yet. Add a file above to see laps, the track map and setup advice.' })); return; }
+    let day = null;
     for (const s of state.sessions) {
-      const on = s.id === state.activeId;
-      box.appendChild(h('div', { class: 'session' + (on ? ' on' : ''), role: 'button', tabindex: '0', 'aria-pressed': on ? 'true' : 'false',
+      const on = s.id === state.activeId, d = dayText(s.meta.recordedAt);
+      if (d !== day) { day = d; box.appendChild(h('div', { class: 'session-day', text: d })); }
+      box.appendChild(h('div', { class: 'session' + (on ? ' on' : ''), title: 'Recorded ' + d + ', ' + timeText(s.meta.recordedAt), role: 'button', tabindex: '0', 'aria-pressed': on ? 'true' : 'false',
         onclick: () => { activate(s.id); renderAll(); }, onkeydown: (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); activate(s.id); renderAll(); } } }, [
-        h('div', { class: 'session-track', text: s.trackName }),
+        h('div', { class: 'session-top' }, [h('span', { class: 'session-time num', text: timeText(s.meta.recordedAt) }), h('span', { class: 'session-track', text: s.trackName })]),
         h('div', { class: 'session-car', text: s.meta.car }),
         h('div', { class: 'session-file', text: s.meta.fileName, title: s.meta.fileName }),
         h('div', { class: 'session-meta' }, [
           h('span', { class: 'tag', text: simName(s.meta.sim) }),
-          h('span', { text: dateText(s.meta.recordedAt) }),
+          namedSetup(s) ? h('span', { class: 'session-setup', text: namedSetup(s), title: 'Setup: ' + namedSetup(s) }) : null,
           h('span', { class: 'num', text: s.bestLap ? U.fmtLap(s.bestLap.time) : 'no timed lap' }),
         ]),
         h('button', { class: 'x', type: 'button', 'aria-label': 'Close this session', title: 'Close this session', text: '×', onclick: (ev) => {
@@ -341,8 +351,8 @@
     }
     for (const p of laps) {
       const gap = ref && p !== ref && p.lap.complete && ref.lap.complete ? p.lap.time - ref.lap.time : null;
-      const where = 'Lap ' + p.lap.num + (p.session.setup ? ', ' + p.session.setup.name : '') + (p.session.id !== state.activeId ? ' (' + p.session.meta.fileName + ')' : '');
-      const chip = h('div', { class: 'lapchip' + (p.isRef ? ' is-ref' : ''), style: 'box-shadow: inset 0 3px 0 var(' + p.colorVar + ')', title: where + ', ' + p.session.meta.car }, [
+      const where = 'Lap ' + p.lap.num + ' · ' + whenText(p.session.meta.recordedAt) + (namedSetup(p.session) ? ' · ' + namedSetup(p.session) : '');
+      const chip = h('div', { class: 'lapchip' + (p.isRef ? ' is-ref' : ''), style: 'box-shadow: inset 0 3px 0 var(' + p.colorVar + ')', title: where + ', ' + p.session.meta.car + ', ' + p.session.meta.fileName }, [
         h('span', { class: 'lapchip-key' }, [h('i', { class: 'sw', style: 'background: var(' + p.colorVar + ')' }), 'Lap ' + p.letter]),
         h('span', { class: 'lapchip-time num', text: p.lap.complete ? U.fmtLap(p.lap.time) : 'partial' }),
         h('span', { class: 'lapchip-meta' }, [p.isRef ? h('b', { text: 'Reference' }) : gap == null ? '' : h('b', { class: 'num', text: U.fmtDelta(gap) + ' s' }), ' ' + where]),
@@ -401,5 +411,5 @@
     renderAll();
   }
 
-  STA.app = { start, state, h, pick, active, sessionById, overlayLaps, addLap, removeLap, setRef, clearLaps, letterOf, colourVarOf, analysisFor, techFor, speed, speedUnit, simName, dateText, say, addFiles, scanFolder, refreshLibrary, renderAll, renderLapbar, renderLaps, activate };
+  STA.app = { start, state, h, pick, active, sessionById, overlayLaps, addLap, removeLap, setRef, clearLaps, letterOf, colourVarOf, analysisFor, techFor, speed, speedUnit, simName, dateText, dayText, timeText, whenText, say, addFiles, scanFolder, refreshLibrary, renderAll, renderLapbar, renderLaps, activate };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -478,7 +478,7 @@
     const head = h('h2', { text: 'Did the last change work?' });
     if (!rv || rv.first) return null;
     const laps = (b, a) => 'Typical lap ' + U.fmtLap(b.medianLap || b.bestLap) + ' → ' + U.fmtLap(a.medianLap || a.bestLap);
-    if (rv.sameSetup) return h('section', { class: 'panel' }, [head, h('p', { class: 'hint', text: 'Same setup as ' + rv.before.fileName + '. ' + laps(rv.before, rv.after) + '.' })]);
+    if (rv.sameSetup) return h('section', { class: 'panel' }, [head, h('p', { class: 'hint', text: 'Same setup as the run before (' + A().whenText(rv.before.recordedAt) + '). ' + laps(rv.before, rv.after) + '.' })]);
     const verdict = { helped: 'Helped', none: 'No clear difference', hurt: 'Worse' };
     const rows = rv.changes.map((c) => ({
       change: c.title, vals: c.from + ' → ' + c.to,
@@ -489,7 +489,7 @@
     const lap = rv.lap, lapWord = lap.rel == null ? '' : lap.word === 'same' ? ' (no real change)' : ' (' + Math.abs(lap.rel * 100).toFixed(2) + '% ' + lap.word + ')';
     return h('section', { class: 'panel' }, [
       head,
-      h('p', { class: 'hint', text: 'Against ' + rv.before.fileName + ' ("' + rv.setupBefore.name + '"). ' + laps(rv.before, rv.after) + lapWord + '.' }),
+      h('p', { class: 'hint', text: 'Against the run before (' + A().whenText(rv.before.recordedAt) + ', "' + rv.setupBefore.name + '"). ' + laps(rv.before, rv.after) + lapWord + '.' }),
       rows.length ? table([{ key: 'change', label: 'Changed' }, { key: 'vals', label: 'From → to' }, { key: 'meant', label: 'Aimed at' }, { key: 'verdict', label: 'Result' }], rows)
         : h('p', { class: 'empty', text: 'Only settings the app does not judge changed (fuel, gearing, cooling).' }),
       over.length ? h('p', { class: 'instead', text: 'Too far: ' + over.map((c) => lower(c.title)).join('; ') + '. Go back half the step.' }) : null,
