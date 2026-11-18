@@ -94,7 +94,7 @@
     const sim = session.meta.sim, car = session.meta.car;
     // What earlier sessions with this car say about each kind of change.
     const outcomes = STA.learning.outcomes(state.summaries, state.setups, { sim, car });
-    return { an, outcomes, adv: STA.advisor.advise(an, session.setup, { blocked: STA.library.blocked.set(sim, car), limits: STA.library.limits.map(sim, car), track: session.trackName, outcomes }) };
+    return { an, outcomes, adv: STA.advisor.advise(an, session.setup, { blocked: STA.library.blocked.set(sim, car), limits: STA.library.limits.map(sim, car), contested: STA.library.contested.map(sim, car), track: session.trackName, outcomes }) };
   }
 
   /* Driving-technique analysis, cached per session. */

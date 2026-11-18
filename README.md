@@ -88,12 +88,23 @@ setup that was on the car.
   already disconnected, the app stiffens the front bar, or softens the rear springs,
   rather than asking for a softer rear bar. What was skipped, and why, is listed under the
   suggestions.
-- **"Not possible on this car".** LMU reports each setting's range, so the app knows its
+- **Contesting a change.** Every suggestion has **Contest this change**. Pick a reason:
+  you do not want the trade-off, you tried it and it did not help, you tried it and it
+  made the car worse, or the car cannot do it. The change is taken out and the next way to
+  get the same effect is offered in its place, marked as the alternative to what you
+  contested. You can contest the alternative too. When no setup route is left for a
+  problem, the app says so and shows the driving-side options instead. Contested changes
+  are remembered per car (at every track), apply to the baseline as well, are listed under
+  the suggestions with **Allow again**, and are included in the library export. Each
+  change in a proposed baseline has its own **Contest** link; a change that only existed
+  to balance a contested one (front aero trimmed to match a smaller rear wing) is dropped
+  with it.
+- **"Not possible on this car".** This is the fourth reason in the contest menu. LMU reports each setting's range, so the app knows its
   limits. iRacing does not, so there the app only knows a limit when the value itself says
   so (a bar that reads "Disconnected", a setting at zero) or when it is built in: a
   differential's lock on power, set as a count of clutch friction faces, is never taken
-  below 2. If the app still suggests something the garage will not allow, press **Not
-  possible on this car** on that suggestion. The app records the current value as the
+  below 2. If the app still suggests something the garage will not allow, choose **Not
+  possible on this car** for that suggestion. The app records the current value as the
   limit in that direction for that car, stops suggesting the change, and re-plans around
   it. The limit is tied to the value: if "cannot go below 2" is recorded and a later setup
   has 4, a reduction is offered again. Limits can be removed from the list under the

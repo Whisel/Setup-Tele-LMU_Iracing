@@ -122,7 +122,7 @@
       for (const k of Object.keys(data.blocked)) {
         if (!Array.isArray(data.blocked[k])) continue;
         const have = new Set((blockedAll()[k] || []).map((e) => JSON.stringify(e)));
-        blockedAll()[k] = (blockedAll()[k] || []).concat(data.blocked[k].filter((e) => (typeof e === 'string' || isLimit(e)) && !have.has(JSON.stringify(e))));
+        blockedAll()[k] = (blockedAll()[k] || []).concat(data.blocked[k].filter((e) => (typeof e === 'string' || isLimit(e) || isContest(e)) && !have.has(JSON.stringify(e))));
       }
       blockedSave();
     }
@@ -152,6 +152,14 @@
     clear: () => { blockedMem = {}; blockedSave(); },
   };
   const isLimit = (e) => e && typeof e === 'object' && e.paramId && (e.dir === '+' || e.dir === '-');
+  // { contest: "role|axle|dir", reason, at }: a suggested change the driver contested, and why.
+  const isContest = (e) => e && typeof e === 'object' && typeof e.contest === 'string';
+  const contested = {
+    list: (sim, car) => entries(sim, car).filter(isContest),
+    map: (sim, car) => new Map(entries(sim, car).filter(isContest).map((e) => [e.contest, e])),
+    add: (sim, car, key, reason) => put(sim, car, entries(sim, car).filter((x) => !(isContest(x) && x.contest === key)).concat({ contest: key, reason, at: Date.now() })),
+    remove: (sim, car, key) => put(sim, car, entries(sim, car).filter((x) => !(isContest(x) && x.contest === key))),
+  };
   const limits = {
     list: (sim, car) => entries(sim, car).filter(isLimit),
     map: (sim, car) => new Map(entries(sim, car).filter(isLimit).map((e) => [e.paramId + '|' + e.dir, e])),
@@ -162,6 +170,6 @@
   const sameCar = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
   const sameTrack = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
 
-  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked, limits,
+  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked, limits, contested,
     get persistent() { return backend ? backend.persistent : null; } };
 })(typeof window !== 'undefined' ? window : globalThis);

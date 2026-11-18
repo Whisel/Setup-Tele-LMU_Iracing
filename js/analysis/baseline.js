@@ -70,14 +70,16 @@
     opts = opts || {};
     const pref = opts.pref || {}, track = readTrack(opts.profile, pref);
     const net = new Map();
-    const want = (role, axle, n, why) => {
+    // needs: a change that only makes sense together with another one (named by its "role|axle").
+    const want = (role, axle, n, why, needs) => {
       const key = role + '|' + (axle || '');
-      const e = net.get(key) || { role, axle, n: 0, why: [] };
+      const e = net.get(key) || { role, axle, n: 0, why: [], needs: needs || null };
+      if (!needs) e.needs = null;
       e.n += n; e.why.push(why); net.set(key, e);
     };
 
-    if (track.downforce === 'low') { want('rearWing', 'rear', -2, 'Low-downforce track'); want('frontAero', 'front', -1, 'Keeps aero balance with the smaller rear wing'); }
-    if (track.downforce === 'high') { want('rearWing', 'rear', 2, 'High-downforce track'); want('frontAero', 'front', 1, 'Keeps aero balance with the larger rear wing'); }
+    if (track.downforce === 'low') { want('rearWing', 'rear', -2, 'Low-downforce track'); want('frontAero', 'front', -1, 'Keeps aero balance with the smaller rear wing', 'rearWing|rear'); }
+    if (track.downforce === 'high') { want('rearWing', 'rear', 2, 'High-downforce track'); want('frontAero', 'front', 1, 'Keeps aero balance with the larger rear wing', 'rearWing|rear'); }
     if (track.surface === 'bumpy') {
       want('spring', 'front', -1, 'Bumpy surface'); want('spring', 'rear', -1, 'Bumpy surface');
       want('rideHeight', 'front', 1, 'Clearance on a bumpy surface'); want('rideHeight', 'rear', 1, 'Clearance on a bumpy surface');
@@ -97,7 +99,7 @@
       if (tnd.count < 2) continue;
       const opt = STA.advisor.ruleFor(tnd).find((x) => {
         const axle = x.axle === '@' ? tnd.axle : x.axle;
-        return STA.advisor.resolve(reference, x.role, axle || null, x.dir, { blocked: opts.blocked || null, limits: opts.limits || null }).params.length > 0;
+        return STA.advisor.resolve(reference, x.role, axle || null, x.dir, { blocked: opts.blocked || null, limits: opts.limits || null, contested: opts.contested || null }).params.length > 0;
       });
       if (!opt) continue;
       want(opt.role, opt.axle === '@' ? tnd.axle : opt.axle, opt.dir === '+' ? 1 : -1, 'Seen in ' + tnd.count + ' earlier sessions: ' + tnd.title);
@@ -109,11 +111,12 @@
       source: 'baseline', parentId: reference.id, status: 'in progress', tags: {},
     });
     for (const p of setup.params) delete p.note;
-    const changes = [], notApplied = [], blocked = { blocked: opts.blocked || null, limits: opts.limits || null }, touched = new Set();
+    const changes = [], notApplied = [], blocked = { blocked: opts.blocked || null, limits: opts.limits || null, contested: opts.contested || null }, touched = new Set();
     for (const e of net.values()) {
       if (!e.n) continue;
       const n = U.clamp(e.n, -3, 3), dir = n > 0 ? '+' : '-';
       const why = Array.from(new Set(e.why)).join('; ');
+      if (e.needs && !touched.has(e.needs)) { notApplied.push({ label: STA.advisor.labelFor(e.role, e.axle), why, reason: 'only wanted together with the ' + STA.advisor.labelFor.apply(null, e.needs.split('|')).toLowerCase() + ' change, which was not made' }); continue; }
       // The wanted setting first, then other ways to get the same effect if it cannot move.
       const tries = [{ role: e.role, axle: e.axle || null, dir }].concat(STA.advisor.equivalents(e.role, e.axle || null, dir));
       let done = false, firstWhy = null;
@@ -133,7 +136,7 @@
         if (!applied) { if (!firstWhy) firstWhy = STA.advisor.labelFor(t.role, t.axle) + ' (already at the end of its range)'; continue; }
         if (short) change.text += ' (fewer steps were available)';
         touched.add(key);
-        changes.push({ label: STA.advisor.labelFor(t.role, t.axle), from, to: STA.setup.describe(r.params), text: change.text,
+        changes.push({ key: STA.advisor.blockKey(t.role, t.axle, t.dir), label: STA.advisor.labelFor(t.role, t.axle), from, to: STA.setup.describe(r.params), text: change.text,
           why: why + (t === tries[0] ? '' : '. Used instead of: ' + firstWhy) });
         done = true; break;
       }

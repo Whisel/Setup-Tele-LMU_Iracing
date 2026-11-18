@@ -229,16 +229,28 @@
 
   const blockKey = (role, axle, dir) => role + '|' + (axle || '') + '|' + dir;
 
+  /* Why a driver contested a suggested change. Any of these takes the change out of the
+     advice for that car until it is allowed again, and the next route is offered instead. */
+  const CONTEST = {
+    tradeoff: { label: 'I do not want this trade-off', text: 'you did not want the trade-off' },
+    none: { label: 'I tried it and it did not help', text: 'you tried it and it did not help' },
+    worse: { label: 'I tried it and it made the car worse', text: 'you tried it and it made the car worse' },
+  };
+  const contestText = (e) => (CONTEST[e && e.reason] || CONTEST.tradeoff).text;
+
   /* Settings for an option on this setup, and why it cannot be used if it cannot. */
   function resolve(setup, role, axle, dir, guard) {
-    // guard = { blocked: Set of "role|axle|dir", limits: Map of "paramId|dir" -> limit }. A bare Set is accepted as `blocked`.
+    // guard = { blocked: Set of "role|axle|dir", limits: Map of "paramId|dir" -> limit,
+    //           contested: Map of "role|axle|dir" -> { reason } }. A bare Set is accepted as `blocked`.
     const blocked = guard instanceof Set ? guard : guard && guard.blocked, limits = guard instanceof Set ? null : guard && guard.limits;
+    const contested = guard instanceof Set ? null : guard && guard.contested;
     let params = SU().byRole(setup, role, axle || undefined);
     if (role === 'brakeBias') params = params.filter((p) => !/fine|peak|migration/.test(p.id)).slice(0, 1);
     if (role === 'tc' || role === 'abs') params = params.filter((p) => U.isNum(p.num)).slice(0, 1);
     const label = labelFor(role, axle);
     if (!params.length) return { params, why: label + ' (not adjustable on this car)' };
     if (blocked && blocked.has(blockKey(role, axle, dir))) return { params: [], why: titleFor(role, dir, axle) + ' (you marked this as not possible)' };
+    if (contested && contested.has(blockKey(role, axle, dir))) return { params: [], contested: true, why: titleFor(role, dir, axle) + ' (' + contestText(contested.get(blockKey(role, axle, dir))) + ')' };
     const stuck = params.map((p) => SU().limitReason(p, dir, limits));
     if (stuck.every(Boolean)) return { params: [], why: label + ' (' + stuck[0] + ')' };
     return { params: params.filter((p, i) => !stuck[i]), why: null };
@@ -288,17 +300,21 @@
      opts.blocked:  Set of "role|axle|dir" keys the driver has ruled out altogether.
      opts.limits:   Map of "paramId|dir" -> { num, raw } limits the driver has reported.
      opts.track:    track name, for limits that only apply at one circuit.
-     opts.outcomes: Map of "role|axle|dir" -> { tried, helped, none, hurt } from earlier sessions. */
+     opts.outcomes: Map of "role|axle|dir" -> { tried, helped, none, hurt } from earlier sessions.
+     opts.contested: Map of "role|axle|dir" -> { reason } for changes the driver has contested. */
   function advise(analysis, setup, opts) {
-    const suggestions = [], skipped = [], byKey = new Map(), blocked = { blocked: (opts && opts.blocked) || null, limits: (opts && opts.limits) || null };
-    if (!setup) return { suggestions, skipped, violations: [], car: null, note: 'This file has no setup stored in it, so advice is given as findings only. Load the setup to get specific changes.' };
+    const suggestions = [], skipped = [], exhausted = [], byKey = new Map();
+    const blocked = { blocked: (opts && opts.blocked) || null, limits: (opts && opts.limits) || null, contested: (opts && opts.contested) || null };
+    if (!setup) return { suggestions, skipped, exhausted, violations: [], car: null, note: 'This file has no setup stored in it, so advice is given as findings only. Load the setup to get specific changes.' };
     const car = STA.carLimits ? STA.carLimits.apply(setup, opts && opts.track, blocked.limits) : null;
     const violations = fixViolations(setup, suggestions, byKey);
 
     for (const f of analysis.findings) {
       const list = ruleFor(f);
       let taken = 0;
-      const unavailable = [];
+      const unavailable = [], contestedHere = [];
+      // A suggestion that stands in for a contested one says so.
+      const standIn = (s) => { if (contestedHere.length) s.alternativeTo = Array.from(new Set((s.alternativeTo || []).concat(contestedHere))); };
       for (const first of list) {
         if (taken >= 2) break;
         const axle0 = first.axle === '@' ? f.axle : first.axle;
@@ -308,12 +324,14 @@
         for (const opt of tries) {
           const axle = opt.axle || null;
           const r = resolve(setup, opt.role, axle, opt.dir, blocked);
-          if (!r.params.length) { unavailable.push(r.why); if (!failedWhy) failedWhy = r.why; continue; }
+          if (!r.params.length) { unavailable.push(r.why); if (r.contested) contestedHere.push(r.why); if (!failedWhy) failedWhy = r.why; continue; }
           const key = opt.role + '|' + (axle || '');
           const existing = byKey.get(key);
           if (existing) {
             if (existing.dir === opt.dir && existing.fix) { existing.reasons.push(f.title); existing.findingIds.push(f.id); continue; }
-            if (existing.dir === opt.dir) { existing.reasons.push(f.title); existing.findingIds.push(f.id); existing.score += f.severity * 0.5; taken++; break; }
+            // Already suggested for this same finding (as a stand-in for an earlier option): do not count it twice.
+            if (existing.dir === opt.dir && !existing.fix && existing.findingIds.indexOf(f.id) >= 0) break;
+            if (existing.dir === opt.dir) { existing.reasons.push(f.title); existing.findingIds.push(f.id); existing.score += f.severity * 0.5; standIn(existing); taken++; break; }
             if (existing.fix) continue; // moving it back inside the limit is not optional
             existing.conflict = (existing.conflict || []).concat(f.title);
             continue; // wanted the other way round for another finding: look for a different route
@@ -325,18 +343,21 @@
             effect: opt.effect, cost: opt.cost, reasons: [f.title], findingIds: [f.id], confidence: f.confidence, primary: taken === 0,
             insteadOf: opt === tries[0] ? null : failedWhy, score: f.severity * (taken === 0 ? 1 : 0.6),
           };
+          standIn(s);
           byKey.set(key, s); suggestions.push(s); taken++;
           break;
         }
       }
       if (unavailable.length) skipped.push({ finding: f.title, items: Array.from(new Set(unavailable)) });
+      // Every setup route contested or unavailable: what is left is the driving.
+      if (!taken && contestedHere.length) exhausted.push({ finding: f.title, contested: Array.from(new Set(contestedHere)), tips: STA.technique ? STA.technique.forFinding(f) : [] });
     }
     for (const s of suggestions) if (!s.fix) applyHistory(s, opts && opts.outcomes);
     // Limit fixes first, then first-choice fixes, then the alternatives; changes that have not worked on this car go last.
     const tier = (s) => (s.fix ? 3 : s.demoted ? 0 : s.primary ? 2 : 1);
     suggestions.sort((a, b) => tier(b) - tier(a) || b.score - a.score);
     suggestions.forEach((s, i) => { s.rank = i + 1; });
-    return { suggestions, skipped, violations, car, note: '' };
+    return { suggestions, skipped, exhausted, violations, car, note: '' };
   }
 
   /* Copy of the setup with the chosen suggestions written in. */
@@ -352,5 +373,5 @@
     return SU().refresh(c);
   }
 
-  STA.advisor = { advise, proposeSetup, ROLE, RULES, buildChange, ruleFor, titleFor, labelFor, equivalents, resolve, blockKey };
+  STA.advisor = { advise, proposeSetup, CONTEST, contestText, ROLE, RULES, buildChange, ruleFor, titleFor, labelFor, equivalents, resolve, blockKey };
 })(typeof window !== 'undefined' ? window : globalThis);

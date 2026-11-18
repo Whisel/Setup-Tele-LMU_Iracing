@@ -396,20 +396,30 @@
           h('h3', { text: x.title + (x.amount ? ' by ' + x.amount : '') }),
           h('p', { class: 'now' }, ['Now: ', h('b', { text: x.current })]),
           h('p', { text: x.effect + (x.cost ? ' Trade-off: ' + x.cost.charAt(0).toLowerCase() + x.cost.slice(1) : '') }),
-          x.insteadOf ? h('p', { class: 'instead', text: 'Chosen as the next-best route because the usual fix is unavailable: ' + x.insteadOf + '.' }) : null,
+          x.alternativeTo ? h('p', { class: 'instead', text: 'Offered as the alternative to a change you contested: ' + x.alternativeTo.join('; ') + '.' }) : null,
+          x.insteadOf && !x.alternativeTo ? h('p', { class: 'instead', text: 'Chosen as the next-best route because the usual fix is unavailable: ' + x.insteadOf + '.' }) : null,
           x.historyText ? h('p', { class: 'history' + (x.demoted ? ' against' : ''), text: x.historyText }) : null,
           h('p', { class: 'evidence', text: 'Addresses: ' + x.reasons.join('; ') + '.' + (x.conflict ? ' Works against: ' + x.conflict.join('; ') + '.' : '') }),
         ]),
         h('div', { class: 'suggestion-side' }, [confTag(x.confidence),
-          x.fix ? null : h('button', { class: 'link', type: 'button', text: 'Not possible on this car', title: 'Records that this setting cannot go any further than its current value on this car, then looks for another way to get the same effect',
+          x.fix ? h('span', { class: 'hint', text: 'If this limit is wrong, correct it under Limits below.' })
+            : h('button', { class: 'link', type: 'button', text: 'Contest this change', 'aria-expanded': ui().contestOpen === x.blockKey ? 'true' : 'false',
+              title: 'Say why you do not want this change. It is taken out and the next way to get the same effect is offered instead.',
+              onclick: () => { ui().contestOpen = ui().contestOpen === x.blockKey ? null : x.blockKey; render(); } }),
+          !x.fix && ui().contestOpen === x.blockKey ? h('div', { class: 'contest', role: 'group', 'aria-label': 'Why are you contesting this change?' }, [
+            h('span', { class: 'contest-q', text: 'Why? The app then offers an alternative.' }),
+          ].concat(Object.keys(STA.advisor.CONTEST).map((reason) => h('button', { class: 'btn ghost small', type: 'button', text: STA.advisor.CONTEST[reason].label, onclick: () => {
+            STA.library.contested.add(s.meta.sim, s.meta.car, x.blockKey, reason);
+            ui().contestOpen = null; ui().adviceChecked = null; render();
+          } })), [h('button', { class: 'btn ghost small', type: 'button', text: 'Not possible on this car', title: 'Records that this setting cannot go any further than its current value on this car',
             onclick: () => {
               // Remember the current value as the limit in this direction, so the change is offered again if the value later moves away from it.
               for (const p of s.setup.params) {
                 if (x.paramIds.indexOf(p.id) < 0) continue;
                 STA.library.limits.add(s.meta.sim, s.meta.car, { paramId: p.id, dir: x.dir, num: U.isNum(p.num) ? p.num : null, raw: p.raw, label: p.section + ' / ' + p.label });
               }
-              ui().adviceChecked = null; render();
-            } })]),
+              ui().contestOpen = null; ui().adviceChecked = null; render();
+            } })])) : null]),
       ]));
     });
     const nameIn = h('input', { type: 'text', class: 'text', value: (s.setup ? s.setup.name : 'Setup') + ' – revised', 'aria-label': 'Name for the revised setup' });
@@ -417,8 +427,13 @@
       h('h2', { text: 'Suggested changes, most useful first' }),
       h('p', { class: 'lead', text: 'Change one or two things, drive three to five clean laps, then load the new telemetry and compare. The ticked items are the ones to try first.' }),
       list,
-      adv.skipped.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Left out because this car cannot do them' }),
+      adv.skipped.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Left out, and why' }),
         h('ul', { class: 'plain' }, adv.skipped.map((k) => h('li', {}, [h('b', { text: k.finding + ': ' }), k.items.join('; ') + '.'])))]) : null,
+      adv.exhausted && adv.exhausted.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'No setup alternative left' }),
+        h('p', { text: 'Every setup route to these problems has been contested or is unavailable on this car. What remains is the driving, or allowing one of the contested changes again.' }),
+        h('ul', { class: 'plain' }, adv.exhausted.reduce((acc, e) => acc.concat((e.tips.length ? e.tips.slice(0, 2) : ['No driving-side advice for this one.']).map((tip) => h('li', {}, [h('b', { text: e.finding + ': ' }), tip]))), [])),
+        h('button', { class: 'link', type: 'button', text: 'Open driving technique', onclick: () => { A().state.tab = 'technique'; A().renderAll(); } })]) : null,
+      contestedList(s.meta.sim, s.meta.car, () => { ui().adviceChecked = null; render(); }),
       blockedList.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Changes you marked as not possible on the ' + s.meta.car }),
         h('ul', { class: 'plain' }, blockedList.map((key) => { const [role, axle, dir] = key.split('|'); return h('li', {}, [STA.advisor.titleFor(role, dir, axle || null) + ' ',
           h('button', { class: 'link', type: 'button', text: 'Allow again', onclick: () => { STA.library.blocked.remove(s.meta.sim, s.meta.car, key); ui().adviceChecked = null; render(); } })]); }))]) : null,
@@ -435,6 +450,16 @@
       } })]) : null,
     ]));
     if (s.setup) view().appendChild(limitsPanel(s, adv));
+  }
+
+  /* Changes the driver has contested on this car, each with a way to allow it again. */
+  function contestedList(sim, car, again) {
+    const list = STA.library.contested.list(sim, car);
+    if (!list.length) return null;
+    return h('div', { class: 'skipped' }, [h('h3', { text: 'Changes you contested on the ' + car }),
+      h('ul', { class: 'plain' }, list.map((e) => { const [role, axle, dir] = e.contest.split('|'); return h('li', {}, [h('b', { text: STA.advisor.titleFor(role, dir, axle || null) + ': ' }), STA.advisor.contestText(e) + ' ',
+        h('button', { class: 'link', type: 'button', text: 'Allow again', onclick: () => { STA.library.contested.remove(sim, car, e.contest); again(); } })]); })),
+      h('p', { class: 'hint', text: 'A contested change stays out of the advice and the baseline for this car, at every track, until you allow it again.' })]);
   }
 
   /* Did the change made before this session do what it was meant to? */
@@ -609,6 +634,11 @@
     const tnd = STA.baseline.tendencies(st.summaries, q);
     const reading = STA.baseline.readTrack(profile, b.pref);
 
+    const buildNow = () => {
+      b.result = STA.baseline.build(ref, { profile, pref: b.pref, tendencies: tnd, track: b.track, name: 'App baseline – ' + b.track, blocked: STA.library.blocked.set(b.sim, b.car), limits: STA.library.limits.map(b.sim, b.car), contested: STA.library.contested.map(b.sim, b.car) });
+      b.result.setup.car = b.car; b.result.setup.carClass = ref.carClass; render();
+    };
+
     view().appendChild(h('section', { class: 'panel' }, [
       h('h2', { text: 'Build a baseline' }),
       h('div', { class: 'form' }, [
@@ -625,19 +655,19 @@
       h('ul', { class: 'notes' }, reading.why.map((w) => h('li', { text: w })).concat(
         profile ? [] : [h('li', { text: 'There is no telemetry for ' + b.track + ' in this sim yet, so anything left on "Decide from telemetry" uses the middle setting.' })],
         tnd.filter((t) => t.count >= 2).map((t) => h('li', { text: 'Your earlier sessions with this car keep showing: ' + t.title.toLowerCase() + ' (' + t.count + ' sessions). The baseline leans against it.' })))),
-      h('div', { class: 'actions' }, [h('button', { class: 'btn', type: 'button', text: 'Build baseline for ' + b.track, onclick: () => {
-        b.result = STA.baseline.build(ref, { profile, pref: b.pref, tendencies: tnd, track: b.track, name: 'App baseline – ' + b.track, blocked: STA.library.blocked.set(b.sim, b.car), limits: STA.library.limits.map(b.sim, b.car) });
-        b.result.setup.car = b.car; b.result.setup.carClass = ref.carClass; render();
-      } })]),
+      h('div', { class: 'actions' }, [h('button', { class: 'btn', type: 'button', text: 'Build baseline for ' + b.track, onclick: () => buildNow() })]),
     ]));
 
     if (b.result) {
       const r = b.result;
       view().appendChild(h('section', { class: 'panel' }, [
         h('h2', { text: r.changes.length ? 'Proposed baseline: ' + r.changes.length + (r.changes.length === 1 ? ' change' : ' changes') + ' from "' + ref.name + '"' : 'No changes from "' + ref.name + '"' }),
-        r.changes.length ? table([{ key: 'label', label: 'Setting' }, { key: 'from', label: 'Starting value' }, { key: 'to', label: 'Baseline' }, { key: 'text', label: 'Change' }, { key: 'why', label: 'Why' }], r.changes)
+        r.changes.length ? table([{ key: 'label', label: 'Setting' }, { key: 'from', label: 'Starting value' }, { key: 'to', label: 'Baseline' }, { key: 'text', label: 'Change' }, { key: 'why', label: 'Why' }, { key: 'alt', label: '' }],
+          r.changes.map((c) => Object.assign({}, c, { alt: c.key ? h('button', { class: 'link', type: 'button', text: 'Contest', 'aria-label': 'Contest: ' + c.text, title: 'Take this change out and use another way to get the same effect, if there is one',
+            onclick: () => { STA.library.contested.add(b.sim, b.car, c.key, 'tradeoff'); buildNow(); } }) : '' })))
           : h('p', { class: 'empty', text: 'With these choices the starting setup already suits the track, so it is the baseline. Change the options above if you want it to differ.' }),
         r.notApplied.length ? h('p', { class: 'hint', text: 'Left out: ' + r.notApplied.map((x) => x.label + ' (' + x.reason + ')').join('; ') + '.' }) : null,
+        contestedList(b.sim, b.car, buildNow),
         h('p', { class: 'hint', text: 'Confidence: low to medium. The changes are general rules sized conservatively. Where the sim stores a setting as a step number, the app shows how many steps to move rather than a value it cannot know.' }),
         r.changes.length ? h('div', { class: 'actions' }, [h('button', { class: 'btn', type: 'button', text: 'Save baseline and compare with the starting setup', onclick: async () => {
           await STA.library.saveSetup(r.setup, { userNamed: true }); await A().refreshLibrary();
