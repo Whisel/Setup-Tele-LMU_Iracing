@@ -302,3 +302,16 @@ table.review .verdict { display: block; margin-bottom: 3px; }
 @media (max-width: 900px) { .combo-row, .run-row { grid-template-columns: 1fr 1fr; } .resume { flex-direction: column; align-items: flex-start; } }
 .panel.resume { flex-direction: row; }
 @media (max-width: 900px) { .panel.resume { flex-direction: column; } }
+
+/* ---------- iRacing recorder ---------- */
+.recorder { font-size: 13px; display: flex; flex-direction: column; gap: 5px; padding: 0 2px; }
+.recorder:empty { display: none; }
+.rec-line { display: flex; align-items: center; gap: 7px; }
+.rec-text { flex: 1; min-width: 0; }
+.rec-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.rec-dot.ready { background: var(--good); } .rec-dot.rec { background: var(--crit); } .rec-dot.missing { background: var(--warn); } .rec-dot.idle { background: var(--ink-2); }
+.rec-dot.off { background: transparent; border: 1px solid var(--muted); }
+.rec-hint { color: var(--muted); font-size: 12px; }
+.rec-controls { display: flex; gap: 6px; flex-wrap: wrap; }
+.rec-controls:empty { display: none; }
+.recorder .check { font-size: 12.5px; }

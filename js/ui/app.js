@@ -177,11 +177,11 @@
   }
 
   /* Bring the index up to date. ask: allowed to show the browser's permission prompt (clicks only). */
-  async function scanLib(ask, only) {
+  async function scanLib(ask, only, opts) {
     if (state.lib.busy) return;
     state.lib.busy = true;
     try {
-      const rep = await STA.folders.scan({ ask, only, onProgress: (label, f) => busy('Indexing ' + label, f) });
+      const rep = await STA.folders.scan({ ask, only, includeFresh: !!(opts && opts.includeFresh), onProgress: (label, f) => busy('Indexing ' + label, f) });
       state.lib.report = rep;
       if (rep.added) await refreshLibrary();
       if (ask && rep.added) say('ok', 'Indexed ' + rep.added + (rep.added === 1 ? ' new file.' : ' new files.'));
@@ -190,6 +190,47 @@
     state.lib.busy = false;
     await refreshLib();
     if (state.tab === 'library') STA.views.render();
+  }
+
+  /* ---------- iRacing recorder ---------- */
+
+  /* The recorder says a run has just been saved: index it and, if wanted, open it. */
+  async function runFinished() {
+    await new Promise((r) => setTimeout(r, 1500)); // let the sim finish closing the file
+    if (!state.lib.folders.length) { say('info', 'A run was recorded. Add your iRacing telemetry folder to the Library and new runs will open here by themselves.'); return; }
+    const before = new Set(state.lib.entries.map((e) => e.id));
+    // The sim has closed the file, so it is safe to read even though it was written seconds ago.
+    await scanLib(false, null, { includeFresh: true });
+    const fresh = state.lib.entries.filter((e) => e.kind === 'run' && !e.error && !before.has(e.id)).sort((a, b) => (b.recordedAt || 0) - (a.recordedAt || 0))[0];
+    if (!fresh) {
+      const locked = state.lib.report && state.lib.report.locked.length;
+      say(locked ? 'warn' : 'info', locked ? 'A run was recorded, but the browser needs your OK to read the folder again: Library, then "Allow and rescan".' : 'A run was recorded, but no new file has appeared in your folders yet.');
+      return;
+    }
+    say('ok', 'New run recorded: ' + fresh.car + ' at ' + fresh.track + '.');
+    if (STA.recorder.settings().autoOpen) await openCombo(STA.folders.comboKey(fresh));
+    else renderAll();
+  }
+
+  function renderRecorder() {
+    const box = $('recorder'); if (!box) return;
+    box.innerHTML = '';
+    const R = STA.recorder, cfg = R.settings(), st = R.state, d = R.describe(cfg, st), s = st.status || {};
+    const act = async (cmd) => { try { const r = await R.command(cmd); if (r && r.ok === false && r.message) say('warn', 'Recorder: ' + r.message + '.'); } catch (e) { say('error', 'The recorder did not answer. Is it still running?'); } };
+    box.appendChild(h('div', { class: 'rec-line' }, [
+      h('span', { class: 'rec-dot ' + d.tone, 'aria-hidden': 'true' }),
+      h('span', { class: 'rec-text', text: d.text }),
+      s.simulated ? h('span', { class: 'tag', text: 'simulated' }) : null,
+      h('button', { class: 'link', type: 'button', text: cfg.on ? 'Turn off' : 'Turn on', title: cfg.on ? 'Stop talking to the recorder program' : 'Connect to the recorder program on this PC (see recorder/ in the app folder)', onclick: () => R.setOn(!cfg.on) }),
+    ]));
+    if (!cfg.on) return;
+    if (!st.reachable) { box.appendChild(h('p', { class: 'rec-hint', text: 'Start "Start-iRacing-Recorder" from the app\'s recorder folder on this PC.' })); return; }
+    box.appendChild(h('div', { class: 'rec-controls' }, [
+      s.connected ? h('button', { class: 'btn ghost small', type: 'button', text: s.enabled ? 'Stop recording' : 'Start recording', onclick: () => act(s.enabled ? 'stop' : 'start') }) : null,
+      s.connected && s.recording ? h('button', { class: 'btn ghost small', type: 'button', text: 'New file', title: 'Saves the file so far and starts a new one', onclick: () => act('restart') }) : null,
+    ]));
+    box.appendChild(h('label', { class: 'check' }, [h('input', { type: 'checkbox', checked: s.mode === 'auto', onchange: (ev) => act(ev.target.checked ? 'auto' : 'manual') }), ' Record every run']));
+    box.appendChild(h('label', { class: 'check' }, [h('input', { type: 'checkbox', checked: !!cfg.autoOpen, onchange: (ev) => { R.save({ autoOpen: ev.target.checked }); } }), ' Open a run when it is saved']));
   }
 
   async function addFolder() {
@@ -490,6 +531,10 @@
     // Pick up new recordings without being asked: now, and whenever the window is looked at again.
     // No prompt is shown here; a folder that needs one waits for a click in the Library tab.
     if (state.lib.folders.length) scanLib(false);
+    STA.recorder.on('change', renderRecorder);
+    STA.recorder.on('finished', () => { runFinished(); });
+    renderRecorder();
+    STA.recorder.start();
     let lastAuto = Date.now();
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible' || !state.lib.folders.length || Date.now() - lastAuto < 20000) return;
@@ -497,5 +542,5 @@
     });
   }
 
-  STA.app = { start, state, h, pick, active, sessionById, overlayLaps, addLap, removeLap, setRef, clearLaps, letterOf, colourVarOf, analysisFor, techFor, speed, speedUnit, simName, dateText, dayText, timeText, whenText, say, addFiles, refreshLibrary, refreshLib, scanLib, addFolder, removeFolder, openCombo, renderAll, renderLapbar, renderLaps, activate };
+  STA.app = { start, state, h, pick, active, sessionById, overlayLaps, addLap, removeLap, setRef, clearLaps, letterOf, colourVarOf, analysisFor, techFor, speed, speedUnit, simName, dateText, dayText, timeText, whenText, say, addFiles, refreshLibrary, refreshLib, scanLib, addFolder, removeFolder, openCombo, runFinished, renderRecorder, renderAll, renderLapbar, renderLaps, activate };
 })(typeof window !== 'undefined' ? window : globalThis);

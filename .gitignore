@@ -5,3 +5,5 @@ node_modules/
 vendor/duckdb/*.wasm
 vendor/duckdb/*.worker.js
 .DS_Store
+recorder/recorder-settings.json
+__pycache__/

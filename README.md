@@ -9,6 +9,7 @@ It runs entirely on your computer. Nothing is uploaded.
 
 | Tab | What you get |
 |---|---|
+| (recorder line) | Above the session list: what iRacing's telemetry recording is doing, with start and stop. Needs the program in `recorder/`. |
 | Library | Your telemetry folders, sorted by sim, then car, then track. Opens a car and track the way you left it. |
 | Lap comparison | Any number of laps overlaid: speed, pedals, steering, gear, RPM, G forces and each lap's running time difference to the reference lap, with every driven line on a map and a corner-by-corner table. Laps can come from different sessions at the same track. |
 | Track map | The track drawn from your own position data, with the line coloured by speed, by throttle and brake, or by where each lap gains time. |
@@ -44,6 +45,50 @@ restarted it may ask once to read the folder again, which takes one click (**All
 rescan**). Other browsers can read a folder for one visit only: the index is kept, but the
 folder has to be picked again before a file can be opened. Single files can still be
 dropped on the page in any browser.
+
+## iRacing recorder: recording that starts and stops itself
+
+`recorder/` holds a small program that runs next to iRacing on the same PC. With it, the
+loop is: drive, get out of the car, and the run is already open in the app.
+
+- **Starts recording for you.** In automatic mode it switches iRacing's disk telemetry on
+  whenever the sim is running, so there is no Alt+L to remember. iRacing itself writes a
+  file only while you are in the car and closes it when you get out.
+- **Start, stop and split from the app.** The recorder line above the session list shows
+  what is happening (waiting for iRacing, ready, recording, switched off) with **Start
+  recording** / **Stop recording**, **New file**, and a **Record every run** tick box.
+  Stopping by hand leaves it off until you start it again.
+- **Opens the run when it is saved.** When the sim closes a file the app indexes the
+  folder straight away and, with **Open a run when it is saved** ticked, opens that car and
+  track with the new run added. This needs the telemetry folder in the Library.
+
+Set it up once:
+
+1. Install Python 3.8 or later if the PC does not have it (python.org, or
+   `winget install Python.Python.3.12`). Nothing else is needed.
+2. Double-click `recorder\Start-iRacing-Recorder.cmd` and leave its window open while you
+   drive. To have it start with Windows, put a shortcut to it in the Startup folder
+   (Win+R, `shell:startup`).
+3. In the app, press **Turn on** on the recorder line.
+
+How it works, and what it does not do:
+
+- It uses only what iRacing's SDK provides for add-on programs: it reads the telemetry
+  memory the sim publishes, and sends the SDK's telemetry command (stop, start, restart),
+  which is the same switch as Alt+L. It never writes to the sim's memory, files or
+  settings.
+- It talks to the app through a web server on this computer only (`127.0.0.1:8765`).
+  Pages opened from disk or served from localhost may use it; other websites are refused.
+  If you host the app somewhere, start the recorder with
+  `--allow-origin https://your.site`. `--port` changes the port, `--manual` starts it
+  without automatic recording.
+- In automatic mode, pressing Alt+L to switch telemetry off will be undone within a few
+  seconds. Use **Stop recording** in the app, or untick **Record every run**.
+- Recordings add up: an hour of driving is several hundred megabytes at iRacing's
+  default 60 Hz. The recorder does not delete anything.
+- `python recorder/iracing_recorder.py --simulate` runs it against a pretend sim on any
+  system, which is how the link to the app is tested.
+- iRacing only. Le Mans Ultimate has its own automatic recording setting in the game.
 
 ## Sessions in recorded order
 
@@ -335,6 +380,10 @@ the app without your own data:
 
     node tests/helpers/make-ibt.js sample.ibt
 
+The recorder has its own tests: `python -m unittest recorder/test_recorder.py` (19 tests;
+they cover everything except the two Windows calls that open iRacing's memory and send
+the command).
+
 ## Layout
 
     index.html            page shell
@@ -348,6 +397,8 @@ the app without your own data:
     js/data/car-limits.js per-car limits for iRacing, with their sources
     js/analysis/          handling analysis, advice rules, driving technique,
                           learning from earlier sessions, baseline
+    js/io/recorder.js     talks to the iRacing recorder on this PC
+    recorder/             the iRacing recorder (Python, Windows) and its tests
     js/store/folders.js   watched folders, the file index, where you left off
     js/store/library.js   browser-side setup and session library
     js/ui/                charts, DuckDB loader, app shell and tabs
