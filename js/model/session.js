@@ -16,7 +16,7 @@
   const U = STA.util, G = STA.G;
 
   const IBT_WANT = ['SessionTime', 'Lap', 'LapDist', 'LapDistPct', 'LapLastLapTime', 'LapCurrentLapTime', 'Speed', 'Throttle',
-    'Brake', 'ThrottleRaw', 'Clutch', 'SteeringWheelAngle', 'Gear', 'RPM', 'LatAccel', 'LongAccel', 'VertAccel', 'YawRate', 'YawNorth',
+    'Brake', 'ThrottleRaw', 'Clutch', 'SteeringWheelAngle', 'Gear', 'RPM', 'LatAccel', 'LongAccel', 'VertAccel', 'YawRate', 'YawNorth', 'VelocityX', 'VelocityY',
     'Lat', 'Lon', 'Alt', 'OnPitRoad', 'IsOnTrack', 'FuelLevel', 'BrakeABSactive', 'CFSRrideHeight', 'TrackTempCrew', 'AirTemp',
     'dcBrakeBias', 'dcTractionControl', 'dcABS'];
   for (const w of ['LF', 'RF', 'LR', 'RR']) {
@@ -57,6 +57,7 @@
       steer: scale(v('SteeringWheelAngle'), 180 / Math.PI), gear: f32(v('Gear')), rpm: f32(v('RPM')),
       latG: scale(v('LatAccel'), 1 / G), longG: scale(v('LongAccel'), 1 / G), vertG: scale(v('VertAccel'), 1 / G),
       yawRate: f32(v('YawRate')), yawNorth: f32(v('YawNorth')), lat: v('Lat'), lon: v('Lon'),
+      velX: f32(v('VelocityX')), velY: f32(v('VelocityY')),
       onPit: f32(v('OnPitRoad')), fuel: f32(v('FuelLevel')), abs: f32(v('BrakeABSactive')), lapNo: f32(v('Lap')),
       wheelSpeed: four('speed'), tyrePress: four('pressure'), tyreTempI: temps('I'), tyreTempM: temps('M'), tyreTempO: temps('O'),
       rideH: four('rideHeight'), suspPos: four('shockDefl'),
@@ -272,6 +273,11 @@
     if (U.corr(moving(ch.longG), moving(dv)) < 0) flip(ch.longG);
     if (haveXY && U.corr(moving(ch.latG), moving(latGeo)) < 0) flip(ch.latG);
     if (ch.steer && U.corr(moving(ch.steer), moving(ch.latG)) < 0) flip(ch.steer);
+    // Yaw rate turns the same way as the cornering force. Sideways velocity (car frame) is made
+    // positive toward the inside of the corner the same way: in a corner the car's centre slides
+    // outward a little, so raw sideways velocity runs against lateral G.
+    if (ch.yawRate && U.corr(moving(ch.yawRate), moving(ch.latG)) < 0) flip(ch.yawRate);
+    if (ch.velY) { const quick = (a) => { const o = new Float32Array(n); for (let i = 0; i < n; i++) o[i] = ch.speed[i] > 20 ? a[i] : NaN; return o; }; if (U.corr(quick(ch.velY), quick(ch.latG)) > 0) flip(ch.velY); }
 
     buildLaps(s);
     summarise(s);
@@ -335,7 +341,7 @@
     if (!laps.some((l) => l.complete)) s.warnings.push('No complete lap in this recording. You can still look at the data, but lap comparison and setup advice need at least one full lap.');
   }
 
-  const GRID_SCALARS = ['speed', 'throttle', 'throttleRaw', 'brake', 'steer', 'gear', 'rpm', 'latG', 'longG', 'vertG', 'x', 'y', 'abs', 'tc', 'fuel', 'rideF', 'rideR', 'yawRate', 'clutch'];
+  const GRID_SCALARS = ['speed', 'throttle', 'throttleRaw', 'brake', 'steer', 'gear', 'rpm', 'latG', 'longG', 'vertG', 'x', 'y', 'abs', 'tc', 'fuel', 'rideF', 'rideR', 'yawRate', 'clutch', 'velX', 'velY'];
   const GRID_WHEELS = ['wheelSpeed', 'tyrePress', 'tyreTempI', 'tyreTempM', 'tyreTempO', 'tyreCarcass', 'brakeTemp', 'rideH', 'suspPos'];
 
   /* Resample one lap onto a distance grid from 0 to track length.

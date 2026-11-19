@@ -52,7 +52,7 @@
     ['rideHeight', /rideheight|ride height/],
     ['arb', /\barb|antiroll|antisway|swaybar|anti roll|farb|rarb/],
     // Wings, flaps and their add-ons: which end of the car and which part is worked out in aeroRole().
-    ['aero', /wing|flap|gurney|wicker|diveplane|splitter|canard|noseheight|fwsetting|rwsetting/],
+    ['aero', /wing|flap|mainplane|gurney|wicker|diveplane|splitter|canard|noseheight|fwsetting|rwsetting/],
     ['aeroTrim', /downforcetrim|aeropackage|aerosetting/],
     ['slowBump', /lscomp|lowspeedcomp|slowbump|ls comp|lsbump/],
     ['fastBump', /hscomp|highspeedcomp|fastbump|hs comp|hsbump/],

@@ -9,6 +9,17 @@
    share of the steering the driver normally uses, so it is unit-free and works
    with degrees (iRacing) or percent of lock (LMU).
 
+   Rear sliding. When the file has the car's own forward and sideways velocity and its yaw
+   rate (iRacing does), the slip angle of the rear axle is measured directly:
+       rear slip = atan((b·yawRate − sidewaysVelocity) / forwardVelocity)
+   with b the distance from the centre of gravity to the rear axle (a nominal 1.35 m; an
+   error of 0.3 m moves the result by about half a degree in a hairpin). The slip of the
+   front axle follows from the steering:  steer − K·yawRate/speed  is the front slip minus
+   the rear slip, in steering-wheel degrees. A sample counts as the rear sliding when the
+   rear is at a bigger slip angle than the front, or far beyond the angle it normally
+   works at. Oversteer is reported from how often that happens, not from an average, so
+   a car that steps out and is caught shows up even when most of the corner is tidy.
+
    Everything else (wheel speeds, tyre temperatures, ride height, brakes,
    gearing) is used when the file has the channel and skipped when it does not.
 
@@ -29,6 +40,8 @@
     if (!timed.length) return session.laps.filter((l) => l.complete).slice(0, 3);
     return timed.filter((l) => l.time <= timed[0].time * 1.03).slice(0, 6);
   }
+
+  const REAR_ARM = 1.35; // m, centre of gravity to rear axle (nominal)
 
   function conf(n) { return n >= 3 ? 'high' : n === 2 ? 'medium' : 'low'; }
 
@@ -68,6 +81,7 @@
         const cells = {}, perCorner = {};
         const add = (key, v) => (cells[key] = cells[key] || []).push(v);
         let counter = 0, nearLimit = 0;
+        const haveSlip = !!(grids[0].velX && grids[0].velY && grids[0].yawRate), slip = [];
         const counterBy = { entry: 0, mid: 0, exit: 0 }, nearBy = { entry: 0, mid: 0, exit: 0 };
         grids.forEach((g) => {
           corners.forEach((c, ci) => {
@@ -83,6 +97,9 @@
               const pk = c.name + '|' + ph; (perCorner[pk] = perCorner[pk] || []).push(e);
               nearLimit++; nearBy[ph]++;
               if (g.steer[i] * sg < -0.03 * sRef) { counter++; counterBy[ph]++; }
+              if (haveSlip) slip.push({ ph, band: c.band, name: c.name, lap: g.lapIdx,
+                rear: Math.atan2(REAR_ARM * g.yawRate[i] - g.velY[i], Math.max(1, g.velX[i])) * (180 / Math.PI) * sg,
+                gap: (g.steer[i] - K * g.yawRate[i] / v) * sg });
             }
           });
         });
@@ -93,6 +110,39 @@
         for (const key of Object.keys(perCorner)) if (perCorner[key].length >= 8) cornerIdx[key] = U.median(perCorner[key]);
         out.balance = { K, C, steerRef: sRef, gmax, linearSamples: nLin, matrix, cornerIdx, counterShare: nearLimit ? counter / nearLimit : 0,
           counterBy: { entry: nearBy.entry ? counterBy.entry / nearBy.entry : 0, mid: nearBy.mid ? counterBy.mid / nearBy.mid : 0, exit: nearBy.exit ? counterBy.exit / nearBy.exit : 0 } };
+
+        /* Rear sliding, measured (see the top of this file). */
+        let slide = null;
+        if (slip.length >= 200) {
+          const ref = Math.max(1.5, U.median(slip.map((o) => o.rear)));
+          // The steering test only counts while the rear is actually loaded, so a light car on a fast, easy corner is not read as sliding.
+          const isSlide = (o) => (o.gap < -0.06 * sRef && o.rear >= 0.8 * ref) || o.rear > Math.max(1.8 * ref, ref + 2.5);
+          const cellsS = {}, byCorner = {};
+          for (const o of slip) {
+            const hit = isSlide(o) ? 1 : 0;
+            for (const key of [o.ph, o.ph + '|' + o.band]) { const cS = cellsS[key] || (cellsS[key] = { n: 0, hits: 0, peak: 0 }); cS.n++; cS.hits += hit; if (hit && o.rear > cS.peak) cS.peak = o.rear; }
+            const ck = o.ph + '|' + o.name, bc = byCorner[ck] || (byCorner[ck] = { band: o.band, laps: {} });
+            const L = bc.laps[o.lap] || (bc.laps[o.lap] = { n: 0, hits: 0 }); L.n++; L.hits += hit;
+          }
+          // A corner counts when the rear slides there on at least half of the laps.
+          const repeatIn = (ph, band) => Object.keys(byCorner).filter((k) => k.indexOf(ph + '|') === 0 && (!band || byCorner[k].band === band)).filter((k) => {
+            const per = Object.values(byCorner[k].laps); return per.filter((L) => L.n >= 4 && L.hits / L.n >= 0.15).length >= Math.max(1, Math.ceil(laps.length / 2));
+          }).map((k) => k.split('|')[1]);
+          slide = { ref, cells: cellsS, share: (key) => (cellsS[key] && cellsS[key].n >= 40 ? cellsS[key].hits / cellsS[key].n : null), repeatIn };
+          out.balance.slide = { rearSlipRef: ref, by: Object.fromEntries(PHASES.map((ph) => [ph, slide.share(ph)])),
+            cells: Object.fromEntries(Object.keys(cellsS).map((k) => [k, { n: cellsS[k].n, share: cellsS[k].hits / cellsS[k].n, peak: cellsS[k].peak }])) };
+          for (const ph of PHASES) for (const b of BANDS) {
+            const share = slide.share(ph + '|' + b), where = repeatIn(ph, b);
+            if (share == null || !(share >= 0.08 || (share >= 0.05 && where.length >= 1) || where.length >= 2)) continue;
+            out.findings.push({
+              id: 'os-' + ph + '-' + b, kind: 'oversteer', phase: ph, band: b, area: 'Balance', measured: true,
+              title: PHASE_TEXT[ph] + ' oversteer in ' + BAND_TEXT[b],
+              detail: 'Rear slides: at a bigger slip angle than the front for ' + Math.round(share * 100) + '% of the time near the limit (rear up to ' + cellsS[ph + '|' + b].peak.toFixed(0) + '°, normally ' + ref.toFixed(0) + '°).',
+              evidence: (where.length ? 'Repeats in ' + where.join(', ') + '. ' : '') + lapWord + '.',
+              severity: U.clamp(share / 0.25, 0.25, 1), confidence: where.length ? (laps.length >= 3 ? 'high' : 'medium') : baseConf, corners: where,
+            });
+          }
+        }
 
         const US = 0.25, OS = -0.10;
         for (const ph of PHASES) {
@@ -109,7 +159,7 @@
                 evidence: (worst.length ? 'Worst in ' + worst.join(', ') + '. ' : '') + lapWord + '.',
                 severity: U.clamp((m.idx - 0.2) / 0.5, 0.1, 1), confidence: baseConf, corners: worst,
               });
-            } else if (m.idx <= OS) {
+            } else if (m.idx <= OS && !out.findings.some((f) => f.id === 'os-' + ph + '-' + b)) {
               const worst = names.filter((c) => cornerIdx[c.name + '|' + ph] <= OS).map((c) => c.name);
               out.findings.push({
                 id: 'os-' + ph + '-' + b, kind: 'oversteer', phase: ph, band: b, area: 'Balance',
@@ -143,7 +193,7 @@
         }
         for (const ph of PHASES) {
           const share = out.balance.counterBy[ph];
-          if (share >= 0.03 && !out.findings.some((f) => f.kind === 'oversteer' && f.phase === ph)) {
+          if (!slide && share >= 0.03 && !out.findings.some((f) => f.kind === 'oversteer' && f.phase === ph)) {
             out.findings.push({
               id: 'os-counter-' + ph, kind: 'oversteer', phase: ph, band: 'low', area: 'Balance',
               title: PHASE_TEXT[ph] + ' oversteer (opposite lock)',
@@ -151,6 +201,15 @@
               evidence: lapWord + '.', severity: U.clamp(share / 0.1, 0.2, 1), confidence: baseConf, corners: [],
             });
           }
+        }
+        const loose = out.findings.filter((f) => f.kind === 'oversteer');
+        if (loose.length) for (const f of out.findings) {
+          if (f.kind !== 'understeer') continue;
+          f.rearFirst = true;
+          const same = loose.some((x) => x.phase === f.phase);
+          // Always ranked below the sliding rear itself.
+          f.severity = +Math.min(f.severity * (same ? 0.4 : 0.7), 0.8 * Math.max.apply(null, loose.map((x) => x.severity))).toFixed(3);
+          f.evidence += ' The rear also slides ' + (same ? 'in this part of the corner' : 'elsewhere in the corner') + ': settle the rear first. Only front-end changes are offered for this.';
         }
       } else out.notes.push('Not enough gentle cornering in these laps to calibrate steering against cornering, so balance could not be judged from steering.');
     } else out.notes.push('No steering or lateral G channel, so balance could not be judged.');

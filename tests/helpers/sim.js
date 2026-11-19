@@ -78,19 +78,27 @@ function drive(opts) {
     t += dt;
   }
   const m = out.t.length, K = 2.7 * 14 * (180 / Math.PI), C = 6; // deg per (1/m), deg per g
+  const yawRate = new Float64Array(m), velX = new Float64Array(m), velY = new Float64Array(m), RATIO = 14, ARM = 1.35, RAD = Math.PI / 180;
   const steer = new Float64Array(m), latG = new Float64Array(m), thr = new Float64Array(m), brk = new Float64Array(m), gear = new Int32Array(m), rpm = new Float64Array(m);
   for (let j = 0; j < m; j++) {
     const a = (out.v[j] * out.v[j] * out.kap[j]) / G;
     latG[j] = a;
     let s = K * out.kap[j] + C * a;
     if (opts.understeer && out.v[j] < 28) s += Math.sign(a) * opts.understeer * 80 * Math.pow(Math.min(1, Math.abs(a) / 1.9), 4);
+    // Rear slip angle: 4 degrees at the limit. opts.looseExit adds a slide under power out of slow corners;
+    // the driver takes off lock to hold the line.
+    let rear = 4 * Math.min(1, Math.abs(a) / 1.9);
+    const slowCorner = out.v[j] < 28 && Math.abs(a) > 1.0;
+    if (opts.looseExit && slowCorner && out.ax[j] > 0.3) { rear += 7 * opts.looseExit; s -= Math.sign(a) * RATIO * 7 * opts.looseExit; }
+    yawRate[j] = out.v[j] * out.kap[j]; velX[j] = out.v[j];
+    velY[j] = ARM * yawRate[j] - Math.tan(rear * RAD * Math.sign(a)) * out.v[j];
     steer[j] = s;
     thr[j] = out.ax[j] > 0.3 ? 1 : out.ax[j] > -0.5 ? 0.35 : 0;
     brk[j] = out.ax[j] < -1 ? Math.min(1, -out.ax[j] / (1.6 * G)) : 0;
     gear[j] = Math.max(1, Math.min(6, 1 + Math.floor(out.v[j] / 14)));
     rpm[j] = 3500 + ((out.v[j] % 14) / 14) * 4000;
   }
-  return { track, hz: opts.hz, n: m, t: out.t, dist: out.dist, lap: out.lap, speed: out.v, x: out.x, y: out.y, longAccel: out.ax, latG, steer, thr, brk, gear, rpm,
+  return { track, hz: opts.hz, n: m, t: out.t, dist: out.dist, lap: out.lap, speed: out.v, x: out.x, y: out.y, longAccel: out.ax, latG, steer, thr, brk, gear, rpm, yawRate, velX, velY, slip: !!opts.slip || !!opts.looseExit,
     lastLap: out.lastLap, trueLaps, cross, length };
 }
 

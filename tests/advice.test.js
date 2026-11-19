@@ -256,3 +256,44 @@ test('library: remembers setups and usage, exports and re-imports', async () => 
   assert.strictEqual((await STA.library.setups())[0].name, 'a');
   await assert.rejects(STA.library.importAll({ nope: true }), /not a library export/);
 });
+
+/* ---------- oversteer measured from the rear slip angle ---------- */
+
+const simLib = require('./helpers/sim.js'), { makeIbt: mkIbt } = require('./helpers/make-ibt.js');
+const sessionOf = async (opts) => STA.session.fromIbt(await STA.ibt.read(mkIbt(simLib.drive(Object.assign({ laps: 4, grips: [1, 1, 1, 1] }, opts))), { want: STA.session.IBT_WANT }), { name: 'run.ibt' });
+const REAR_LOOSENING = ['arb|front|-', 'arb|rear|+', 'brakeBias||-', 'diffCoast||-', 'diffPreload||-', 'diffPower||-', 'rearWing|rear|-', 'rideHeight|rear|+', 'spring|front|-'];
+
+test('a rear that steps out and is caught is reported as oversteer, where it happens', async () => {
+  // tidy car with the slip channels: nothing to report
+  const tidy = STA.handling.analyse(await sessionOf({ slip: true }));
+  assert.ok(tidy.balance.slide, 'the rear slip angle is measured when the file has the car\'s velocities');
+  assert.ok(Math.abs(tidy.balance.slide.rearSlipRef - 4) < 1, 'rear slip at the limit is read back as about 4 degrees: ' + tidy.balance.slide.rearSlipRef);
+  assert.deepStrictEqual(tidy.findings.filter((f) => f.kind === 'oversteer'), []);
+  // the same car sliding under power out of the slow corners
+  const exit = STA.handling.analyse(await sessionOf({ looseExit: 1 }));
+  const os = exit.findings.filter((f) => f.kind === 'oversteer');
+  assert.ok(os.length >= 1 && os.every((f) => f.phase === 'exit' && f.band === 'low' && f.measured), JSON.stringify(os.map((f) => f.id)));
+  assert.match(os[0].detail, /^Rear slides: at a bigger slip angle than the front for \d+% of the time near the limit \(rear up to 1\d°, normally \d°\)\.$/);
+  assert.ok(os.every((f) => /laps\.$/.test(f.evidence)));
+  assert.ok(!exit.findings.some((f) => f.kind === 'understeer'));
+  // without the velocity channels the older steering-only reading is used, as before
+  const plain = STA.handling.analyse(await sessionOf({}));
+  assert.strictEqual(plain.balance.slide, undefined);
+});
+
+test('understeer next to a sliding rear: the rear comes first and no cure for the front may loosen the rear', async () => {
+  const s = await sessionOf({ looseExit: 1, understeer: 0.8 }), an = STA.handling.analyse(s);
+  const us = an.findings.filter((f) => f.kind === 'understeer'), os = an.findings.filter((f) => f.kind === 'oversteer');
+  assert.ok(us.length >= 1 && os.length >= 1, JSON.stringify(an.findings.map((f) => f.id)));
+  assert.ok(us.every((f) => f.rearFirst && /settle the rear first/.test(f.evidence)));
+  assert.ok(Math.max(...os.map((f) => f.severity)) > Math.max(...us.map((f) => f.severity)), 'the sliding rear outranks the understeer');
+  const adv = STA.advisor.advise(an, s.setup, {});
+  const offered = adv.suggestions.map((x) => x.blockKey);
+  assert.deepStrictEqual(offered.filter((k) => REAR_LOOSENING.includes(k)), [], 'offered: ' + offered.join(', '));
+  assert.ok(adv.suggestions[0].findingIds.some((id) => id.indexOf('os-') === 0), 'first change is for the rear: ' + adv.suggestions[0].title);
+  const firstFront = adv.suggestions.findIndex((x) => x.rearFirst), lastRear = adv.suggestions.map((x) => x.findingIds.some((id) => id.indexOf('os-') === 0)).lastIndexOf(true);
+  assert.ok(firstFront < 0 || firstFront > lastRear, 'every change for the rear is listed before the front-only ones');
+  // the same understeer on a car whose rear is stable still gets the usual cures
+  const calm = await sessionOf({ slip: true, understeer: 0.8 }), advCalm = STA.advisor.advise(STA.handling.analyse(calm), calm.setup, {});
+  assert.ok(advCalm.suggestions.some((x) => x.blockKey === 'arb|front|-'), advCalm.suggestions.map((x) => x.blockKey).join(', '));
+});

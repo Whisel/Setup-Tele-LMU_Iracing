@@ -459,6 +459,7 @@
       if (x.alternativeTo) tags.push(['warn', 'Instead of: ' + x.alternativeTo.join('; ')]);
       else if (x.insteadOf) tags.push(['warn', 'Instead of: ' + x.insteadOf]);
       if (x.learned) tags.push(['good', 'Learned on this car']);
+      if (x.rearFirst) tags.push(['warn', 'After the rear is settled: the rear slides on this car']);
       if (x.bigger) tags.push(['warn', 'Bigger step: one was too small last time']);
       if (x.historyText) tags.push([x.demoted ? 'bad' : 'good', x.historyText]);
       if (x.conflict) tags.push(['warn', 'Works against: ' + x.conflict.join('; ')]);

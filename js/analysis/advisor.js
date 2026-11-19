@@ -51,6 +51,8 @@
     return txt.charAt(0).toUpperCase() + txt.slice(1);
   }
 
+  const FRONT_ONLY = { camber: 1, toe: 1, pressure: 1, frontAero: 1, slowBump: 1, slowRebound: 1, fastBump: 1, fastRebound: 1 };
+
   // option = [role, axle, direction, effect, trade-off]
   const o = (role, axle, dir, effect, cost) => ({ role, axle, dir, effect, cost });
 
@@ -398,7 +400,10 @@
       // What this car has taught the app comes before the general rules.
       const own = ((learned && tk && learned.get(tk)) || []).map((e) => ({ role: e.role, axle: e.axle, dir: e.dir, learned: e.n, lone: true,
         effect: 'Cut this problem on this car before (' + e.n + (e.n === 1 ? ' run' : ' runs') + '). Learned from your own runs; not a textbook answer.', cost: 'Based on your runs only' }));
-      const list = f.option ? [Object.assign({ lone: true }, f.option)] : own.concat(ruleFor(f));
+      let list = f.option ? [Object.assign({ lone: true }, f.option)] : own.concat(ruleFor(f));
+      // Understeer on a car whose rear also slides: only changes that add front grip without
+      // taking load or stability from the rear (no bars, springs, wing, differential or brake bias).
+      if (f.rearFirst) list = list.filter((x) => FRONT_ONLY[x.role] && (x.axle === 'front' || (x.axle === '@' && f.axle === 'front') || x.role === 'frontAero')).map((x) => Object.assign({ lone: true }, x));
       let taken = 0;
       const unavailable = [], contestedHere = [];
       // A suggestion that stands in for a contested one says so.
@@ -446,7 +451,10 @@
     // The wing-level entry is already built from the lap times on record, so its history is not counted twice.
     for (const s of suggestions) if (!s.fix && !(s.findingIds.length === 1 && s.findingIds[0] === 'pace-wing')) applyHistory(s, opts && opts.outcomes);
     // Limit fixes first, then first-choice fixes, then the alternatives; changes that have not worked on this car go last.
-    const tier = (s) => (s.fix ? 3 : s.demoted ? 0 : s.primary ? 2 : 1);
+    // Changes that only serve understeer on a car whose rear slides come after everything for the rear.
+    const waits = new Set(analysis.findings.filter((f) => f.rearFirst).map((f) => f.id));
+    for (const s of suggestions) if (!s.fix && s.findingIds.length && s.findingIds.every((id) => waits.has(id))) s.rearFirst = true;
+    const tier = (s) => (s.fix ? 3 : s.demoted ? 0 : s.rearFirst ? 0.5 : s.primary ? 2 : 1);
     suggestions.sort((a, b) => tier(b) - tier(a) || b.score - a.score);
     suggestions.forEach((s, i) => { s.rank = i + 1; });
     return { suggestions, skipped, exhausted, violations, car, note: '' };

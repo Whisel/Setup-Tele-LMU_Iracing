@@ -205,6 +205,33 @@ setup that was on the car.
   fixed choices, so the advice leaves them alone, but a change to any of them between
   two runs is picked up and judged on lap time like a wing change.
 
+## Understeer or oversteer: how the balance is read
+
+- **Oversteer is measured, not averaged (iRacing).** iRacing logs the car's forward and
+  sideways velocity and its yaw rate. From those the app works out the slip angle of the
+  rear axle, and from the steering the slip angle of the front. A moment counts as the
+  rear sliding when the rear is at a bigger slip angle than the front, or far beyond the
+  angle it normally works at. Oversteer is reported from how often that happens near the
+  limit in each part of the corner ("rear slides for 16% of the time near the limit,
+  repeats in C5, C12"), so a car that steps out and is caught shows up even when most
+  of the corner is tidy.
+- **Why this was changed.** The earlier reading compared the driver's steering with what
+  a gentle corner needs and took the middle value. A slide that is caught lasts a
+  fraction of a second, so the middle value never saw it, while holding the car at the
+  limit mid-corner always takes more lock than the gentle-corner line. The result was
+  "understeer" on cars that were loose, and changes that made them looser. On a public
+  recording of a prototype whose rear slides for 46% of slow-corner exits, the old
+  reading led with "soften the front bar, move brake bias rearward, take off rear wing,
+  stiffen the rear bar"; the new one leads with traction control and a softer rear bar.
+- **The rear comes first.** When the rear slides anywhere in the corner, understeer found
+  alongside it is ranked below it and marked "after the rear is settled". For that
+  understeer only front-end changes that do not take load or stability from the rear
+  are offered (front camber, toe, pressures, dampers, front wing): no bars, springs,
+  rear wing, differential or brake bias.
+- **Le Mans Ultimate, and files without those channels.** The older steering-only reading
+  is still used there, so treat an "understeer" finding on a car that feels loose with
+  suspicion and contest the change.
+
 ## Car limits
 
 A suggestion is never allowed to take a setting past what the car allows, and a setting

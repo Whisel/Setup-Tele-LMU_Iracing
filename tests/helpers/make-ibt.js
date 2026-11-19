@@ -106,6 +106,8 @@ function makeIbt(run, extra) {
     ['OnPitRoad', 1, '', () => 0],
     ['FuelLevel', 4, 'l', (j) => 60 - run.t[j] * 0.01],
   ];
+  // The car's own velocities and yaw rate, as iRacing logs them (only when the run was simulated with them).
+  if (run.slip) cols.push(['YawRate', 4, 'rad/s', (j) => run.yawRate[j]], ['VelocityX', 4, 'm/s', (j) => run.velX[j]], ['VelocityY', 4, 'm/s', (j) => run.velY[j]]);
   const size = { 1: 1, 2: 4, 4: 4, 5: 8 };
   let off = 0; const vars = cols.map(([name, type, unit, fn]) => { const v = { name, type, unit, fn, offset: off }; off += size[type]; return v; });
   const bufLen = off, yaml = Buffer.from(sessionYaml(run, extra) + '\0', 'latin1');
