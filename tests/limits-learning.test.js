@@ -17,10 +17,12 @@ test('car limits: the right entry is found from the sim\'s car name, and unknown
   assert.strictEqual(L.forCar('iracing', 'Lamborghini Huracán GT3 EVO').name, 'Lamborghini Huracán GT3 EVO');
   assert.strictEqual(L.forCar('iracing', 'BMW M4 GT3').name, 'BMW M4 GT3');
   assert.strictEqual(L.forCar('iracing', 'BMW M4 G82 GT4').name, 'BMW M4 G82 GT4');
+  assert.strictEqual(L.forCar('iracing', 'Super Formula SF23 - Toyota').name, 'Super Formula SF23');
+  assert.strictEqual(L.forCar('iracing', 'Super Formula SF23 - Honda').name, 'Super Formula SF23');
   assert.strictEqual(L.forCar('iracing', 'Test GT3'), null);
   assert.strictEqual(L.forCar('lmu', 'BMW M4 GT3'), null, 'LMU carries its own ranges in the recording');
   // every built-in entry parses to at least one usable limit and links its source
-  for (const c of L.CARS) { assert.ok(c.limits.length >= 1, c.name); assert.match(c.url, /^https:\/\/s100\.iracing\.com\//); assert.ok(c.limits.every((x) => x.role && (x.min != null || x.max != null)), c.name); }
+  for (const c of L.CARS) { assert.ok(c.limits.length + c.links.length >= 1, c.name); assert.match(c.url, /^https:\/\/s100\.iracing\.com\//); assert.ok(c.limits.every((x) => x.role && (x.min != null || x.max != null)), c.name); }
 });
 
 test('Super Formula Lights: front ride height is never taken above 20 mm', () => {
@@ -601,4 +603,64 @@ test('the wing level is its own lap-time question: every level tried is compared
   assert.ok(adv.suggestions.some((x) => x.blockKey === 'rearWing|rear|+'), 'the handling need for more wing stands');
   // and it can be contested like any other change
   assert.strictEqual(wing(STA.advisor.advise({ findings: [] }, before.setup, { pace: fast, contested: contest(['rearWing|rear|-', 'tradeoff']) })), undefined);
+});
+
+/* ---------- a limit that depends on another setting ---------- */
+
+const sf23 = (flap, wing) => STA.setup.fromIracing({ TiresAero: { FrontAero: { FlapAngle: flap + ' deg' }, RearAero: { WingAngle: wing + ' deg', GurneyFlap: '5 mm' } },
+  Chassis: { Front: { ArbDiameter: '18 mm' }, Rear: { ArbDiameter: '15 mm' } } }, { car: 'Super Formula SF23 - Toyota', track: 'Suzuka', name: 'sf' });
+const fastUndersteer = [{ id: 'us-entry-high', kind: 'understeer', phase: 'entry', band: 'high', title: 'Corner entry understeer in fast corners', severity: 0.9, confidence: 'medium' }];
+
+test('Super Formula SF23: the front flap limit depends on the rear wing angle, and is only used where it is known', () => {
+  const flapOf = (s) => s.params.find((p) => p.role === 'frontAero');
+  // at 18.5 deg of rear wing the flap stops at 24
+  const atLimit = sf23('24.0', '18.5'), adv = STA.advisor.advise({ findings: fastUndersteer }, atLimit, {});
+  assert.deepStrictEqual([flapOf(atLimit).hi, flapOf(atLimit).hiSrc], [24, 'reported by a driver for 18.5 deg rear wing']);
+  assert.ok(!adv.suggestions.some((s) => s.blockKey === 'frontAero|front|+'), 'more front flap is not offered at the limit');
+  assert.match(JSON.stringify(adv), /cannot go above 24 deg on this car, reported by a driver for 18\.5 deg rear wing/);
+  assert.strictEqual(adv.violations.length, 0);
+  // below it there is room, and the suggestion can say where the limit is
+  const room = sf23('22.5', '18.5');
+  assert.ok(STA.advisor.advise({ findings: fastUndersteer }, room, {}).suggestions.some((s) => s.blockKey === 'frontAero|front|+'));
+  assert.deepStrictEqual([flapOf(room).link.known, flapOf(room).link.at, flapOf(room).link.otherName], [true, 18.5, 'rear wing']);
+  // above it the setup is not one the garage allows: the fix comes first
+  const over = STA.advisor.advise({ findings: [] }, sf23('25.0', '18.5'), {});
+  assert.strictEqual(over.violations.length, 1);
+  assert.ok(over.suggestions[0].fix && over.suggestions[0].paramIds[0] === 'tiresaero/frontaero/flapangle');
+  // at another rear wing angle nothing is assumed: no limit, and the app knows that it does not know
+  const other = sf23('24.0', '16.0'), advOther = STA.advisor.advise({ findings: fastUndersteer }, other, {});
+  assert.strictEqual(flapOf(other).hi, undefined);
+  assert.deepStrictEqual([flapOf(other).link.known, flapOf(other).link.at, flapOf(other).link.points.map((k) => [k.x, k.y])], [false, 16, [[18.5, 24]]]);
+  assert.ok(advOther.suggestions.some((s) => s.blockKey === 'frontAero|front|+'));
+  // no other setting on this car gets a limit from it
+  assert.deepStrictEqual(atLimit.params.filter((p) => p.hi != null || p.lo != null).map((p) => p.id), ['tiresaero/frontaero/flapangle']);
+});
+
+test('linked limits the driver records are kept per rear wing angle and fill in between recorded angles', () => {
+  const sim = 'iracing', car = 'Super Formula SF23 - Toyota', flapId = 'tiresaero/frontaero/flapangle', wingId = 'tiresaero/rearaero/wingangle';
+  const flapOf = (s) => s.params.find((p) => p.id === flapId);
+  STA.library.blocked.clear();
+  const point = (flap, wing) => ({ paramId: flapId, dir: '+', num: flap, raw: flap + ' deg', label: 'Front aero / Flap angle', when: { paramId: wingId, num: wing, raw: wing + ' deg' } });
+  STA.library.limits.add(sim, car, point(20, 14)); STA.library.limits.add(sim, car, point(21, 15)); STA.library.limits.add(sim, car, point(20.5, 15));
+  const learned = STA.library.limits.map(sim, car);
+  assert.deepStrictEqual([learned.size, learned.points.map((e) => [e.when.num, e.num])], [0, [[14, 20], [15, 20.5]]], 'one point per rear wing angle; the later entry replaces the earlier');
+
+  const at14 = sf23('20.0', '14.0'); STA.carLimits.apply(at14, null, learned);
+  assert.deepStrictEqual([flapOf(at14).hi, flapOf(at14).hiSrc], [20, 'set by you for 14 deg rear wing']);
+  assert.match(STA.setup.limitReason(flapOf(at14), '+', learned), /cannot go above 20 deg on this car, set by you for 14 deg rear wing/);
+  // half-way between 15 (20.5) and 18.5 (24): a straight line between them, marked as an estimate
+  const between = sf23('21.0', '16.75'); STA.carLimits.apply(between, null, learned);
+  assert.ok(Math.abs(flapOf(between).hi - 22.25) < 1e-9);
+  assert.deepStrictEqual([flapOf(between).hiSrc, flapOf(between).link.estimated], ['estimated between the limits recorded at 15 and 18.5 deg rear wing', true]);
+  // outside the recorded angles nothing is assumed
+  for (const wing of ['12.0', '20.0']) { const s = sf23('23.0', wing); STA.carLimits.apply(s, null, learned); assert.strictEqual(flapOf(s).hi, undefined, wing); }
+  // a point of your own replaces the built-in one at the same angle, and can be removed again
+  STA.library.limits.add(sim, car, point(24.5, 18.5));
+  const fixed = sf23('24.0', '18.5'); STA.carLimits.apply(fixed, null, STA.library.limits.map(sim, car));
+  assert.deepStrictEqual([flapOf(fixed).hi, flapOf(fixed).hiSrc], [24.5, 'set by you for 18.5 deg rear wing']);
+  STA.library.limits.remove(sim, car, flapId, '+', 18.5);
+  STA.carLimits.apply(fixed, null, STA.library.limits.map(sim, car));
+  assert.strictEqual(flapOf(fixed).hi, 24);
+  assert.strictEqual(STA.library.limits.list(sim, car).length, 2);
+  STA.library.blocked.clear();
 });

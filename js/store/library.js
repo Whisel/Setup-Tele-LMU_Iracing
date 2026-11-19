@@ -171,7 +171,9 @@
   function blockedSave() { try { root.localStorage.setItem('sta-blocked', JSON.stringify(blockedMem)); } catch (e) { /* kept for this visit only */ } }
   const carKey = (sim, car) => sim + '|' + U.slug(car);
   // Entries per car are either a string "role|axle|dir" (a change ruled out altogether) or an
-  // object { paramId, dir, num, raw, label } (a setting that cannot go past a value).
+  // object { paramId, dir, num, raw, label } (a setting that cannot go past a value). With
+  // `when: { paramId, num, raw }` the limit holds only at that value of another setting
+  // (a linked limit, see car-limits.js); several of those can exist for one setting.
   const entries = (sim, car) => blockedAll()[carKey(sim, car)] || [];
   const put = (sim, car, list) => { blockedAll()[carKey(sim, car)] = list; blockedSave(); };
   const blocked = {
@@ -190,11 +192,13 @@
     add: (sim, car, key, reason) => put(sim, car, entries(sim, car).filter((x) => !(isContest(x) && x.contest === key)).concat({ contest: key, reason, at: Date.now() })),
     remove: (sim, car, key) => put(sim, car, entries(sim, car).filter((x) => !(isContest(x) && x.contest === key))),
   };
+  const sameLimit = (a, b) => a.paramId === b.paramId && a.dir === b.dir && (a.when ? !!b.when && Math.abs(a.when.num - b.when.num) < 0.01 : !b.when);
   const limits = {
     list: (sim, car) => entries(sim, car).filter(isLimit),
-    map: (sim, car) => new Map(entries(sim, car).filter(isLimit).map((e) => [e.paramId + '|' + e.dir, e])),
-    add: (sim, car, e) => put(sim, car, entries(sim, car).filter((x) => !(isLimit(x) && x.paramId === e.paramId && x.dir === e.dir)).concat(e)),
-    remove: (sim, car, paramId, dir) => put(sim, car, entries(sim, car).filter((x) => !(isLimit(x) && x.paramId === paramId && x.dir === dir))),
+    // Flat limits by "paramId|dir"; linked ones ride along as map.points.
+    map: (sim, car) => { const all = entries(sim, car).filter(isLimit), m = new Map(all.filter((e) => !e.when).map((e) => [e.paramId + '|' + e.dir, e])); m.points = all.filter((e) => e.when); return m; },
+    add: (sim, car, e) => put(sim, car, entries(sim, car).filter((x) => !(isLimit(x) && sameLimit(x, e))).concat(e)),
+    remove: (sim, car, paramId, dir, whenNum) => put(sim, car, entries(sim, car).filter((x) => !(isLimit(x) && sameLimit(x, { paramId, dir, when: whenNum == null ? null : { num: whenNum } })))),
   };
 
   const sameCar = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';

@@ -15,7 +15,14 @@
            diffp differential lock on power
      axle  f, r, or a (both)
      min/max  blank when the manual gives only one side
-     @nord    applies only at the Nürburgring Nordschleife */
+     @nord    applies only at the Nürburgring Nordschleife
+
+   Linked limits: a limit that depends on another setting, e.g. on the Super Formula SF23
+   the highest front flap angle depends on the rear wing angle. They are kept as points,
+   { role, axle, dir, by, points: [[value of the other setting, limit], ...] }, and only
+   used where they are known: at a recorded value of the other setting, or between two
+   recorded values (straight line between them, marked as an estimate). Nothing is
+   assumed outside the recorded values. Points the driver records in the app are added. */
 (function (root) {
   'use strict';
   const STA = (root.STA = root.STA || {});
@@ -28,6 +35,9 @@
   // Order matters: the first matching pattern wins, so specific names come before general ones.
   const IRACING = [
     ['Super Formula Lights', 'super formula lights|f324|\\bsfl\\b', M + '2024/03/Super-Formula-Lights_Manual_V1.pdf', 'arb:f:1:5', 'rh:f::20'],
+    // The manual gives no ranges. Driver-reported: the only limit is the front flap, and it depends on the rear wing.
+    ['Super Formula SF23', 'super formula sf ?23|\\bsf ?23\\b', M + '2024/04/Super-Formula-SF23_V4.pdf', '', '',
+      [{ role: 'frontAero', axle: 'front', dir: '+', by: 'rearWing', points: [[18.5, 24]] }]],
     ['FIA F4', '\\bf4\\b', M + '2024/04/FIA-F4-Manual-V3.pdf', 'rh:f:20:,rh:r:30:40,spr:a:88:175,arb:a:1:5,lsc:a:1:10,lsr:a:1:10'],
     ['Formula Vee', 'formula vee|\\bvee\\b', M + '2023/10/Formula-Vee-Manual.pdf', 'rh:f:25.4:,rh:r:114:152'],
     ['Acura ARX-06 GTP', 'arx 06|arx06', M + '2025/01/Acura-ARX-06-GTP-V2.pdf', 'arb:a::5'],
@@ -84,9 +94,10 @@
     });
   }
 
-  const CARS = IRACING.map(([name, pattern, url, manual, driver]) => ({
+  const CARS = IRACING.map(([name, pattern, url, manual, driver, links]) => ({
     sim: 'iracing', name, re: new RegExp(pattern), url,
     limits: parseSpec(manual || '', 'manual').concat(parseSpec(driver || '', 'driver')),
+    links: links || [],
   }));
 
   function forCar(sim, carName) {
@@ -106,11 +117,50 @@
     return t === String(from).toLowerCase() ? v : null;
   }
 
+  /* The setting a linked limit depends on, for setting p of this setup: { link, other } or null.
+     A built-in link comes from the car's entry; a point the driver recorded names the other setting itself. */
+  function linkOf(setup, p, dir, car) {
+    const c = car === undefined ? forCar(setup.sim, setup.car) : car;
+    const link = c && c.links.find((L) => L.role === p.role && (!L.axle || L.axle === p.axle) && (!dir || L.dir === dir));
+    if (!link) return null;
+    const other = setup.params.find((q) => q.role === link.by && !q.derived && U.isNum(q.num));
+    return other ? { link, other } : null;
+  }
+
+  /* Linked limits -> p.hi / p.lo where known at the other setting's current value, and
+     p.link = { dir, other, at, points, known } so the app can say what it knows and does not. */
+  function applyLinks(setup, car, learned) {
+    const mine = (learned && learned.points) || [], name = (q) => (q.role === 'rearWing' ? 'rear wing' : q.label.toLowerCase());
+    for (const p of setup.params) {
+      if (p.derived || !U.isNum(p.num)) continue;
+      for (const dir of ['+', '-']) {
+        const built = linkOf(setup, p, dir, car), own = mine.filter((e) => e.paramId === p.id && e.dir === dir && U.isNum(e.num) && e.when && U.isNum(e.when.num));
+        const other = built ? built.other : own.length ? setup.params.find((q) => q.id === own[0].when.paramId && U.isNum(q.num)) : null;
+        if (!other) continue;
+        // Recorded points: the driver's own replace a built-in one at the same value.
+        const pts = new Map();
+        for (const [x, y] of built ? built.link.points : []) pts.set(x, { x, y, src: 'reported by a driver' });
+        for (const e of own) if (e.when.paramId === other.id) pts.set(e.when.num, { x: e.when.num, y: e.num, src: 'set by you' });
+        const points = Array.from(pts.values()).sort((a, b) => a.x - b.x), at = other.num, unit = other.unit ? ' ' + other.unit : '';
+        const exact = points.find((k) => Math.abs(k.x - at) < 0.01);
+        const below = points.filter((k) => k.x < at).pop(), above = points.find((k) => k.x > at);
+        let bound = null, src = null;
+        if (exact) { bound = exact.y; src = exact.src + ' for ' + +exact.x.toFixed(2) + unit + ' ' + name(other); }
+        else if (below && above) {
+          bound = below.y + (above.y - below.y) * (at - below.x) / (above.x - below.x);
+          src = 'estimated between the limits recorded at ' + +below.x.toFixed(2) + ' and ' + +above.x.toFixed(2) + unit + ' ' + name(other);
+        }
+        if (bound != null) { if (dir === '+') { p.hi = bound; p.hiSrc = src; } else { p.lo = bound; p.loSrc = src; } }
+        p.link = { dir, otherId: other.id, otherName: name(other), otherUnit: other.unit || '', at, points, known: bound != null, estimated: bound != null && !exact };
+      }
+    }
+  }
+
   /* Write the known range onto each matching setting of a setup: p.lo / p.hi in the setting's
      own unit, with p.loSrc / p.hiSrc saying where the limit came from. Safe to call repeatedly. */
   function apply(setup, trackName, learned) {
     if (!setup || !setup.params) return null;
-    for (const p of setup.params) { delete p.lo; delete p.hi; delete p.loSrc; delete p.hiSrc; }
+    for (const p of setup.params) { delete p.lo; delete p.hi; delete p.loSrc; delete p.hiSrc; delete p.link; }
     // Limits the driver entered for this car count the same way as the built-in ones.
     if (learned) for (const p of setup.params) {
       if (!U.isNum(p.num)) continue;
@@ -119,6 +169,7 @@
       if (hi && U.isNum(hi.num)) { p.hi = hi.num; p.hiSrc = 'set by you'; }
     }
     const car = forCar(setup.sim, setup.car);
+    applyLinks(setup, car, learned);
     if (!car) return null;
     const track = U.slug(trackName == null ? setup.track : trackName);
     for (const L of car.limits) {
@@ -152,5 +203,5 @@
     return out;
   }
 
-  STA.carLimits = { CARS, forCar, apply, violations, toUnit };
+  STA.carLimits = { CARS, forCar, apply, violations, toUnit, linkOf };
 })(typeof window !== 'undefined' ? window : globalThis);

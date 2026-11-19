@@ -462,6 +462,7 @@
       if (x.bigger) tags.push(['warn', 'Bigger step: one was too small last time']);
       if (x.historyText) tags.push([x.demoted ? 'bad' : 'good', x.historyText]);
       if (x.conflict) tags.push(['warn', 'Works against: ' + x.conflict.join('; ')]);
+      for (const note of linkNotes(s.setup, x)) tags.push(['warn', note]);
       const openMenu = ui().contestOpen === x.blockKey;
       list.appendChild(h('article', { class: 'suggestion' }, [
         h('label', { class: 'check big' }, [h('input', { type: 'checkbox', checked: !!checked[x.key], 'aria-label': 'Include: ' + x.title, onchange: (ev) => { checked[x.key] = ev.target.checked; } }), h('span', { class: 'rank num', text: String(x.rank) })]),
@@ -482,7 +483,7 @@
                   // Remember the current value as the limit in this direction, so the change is offered again if the value later moves away from it.
                   for (const p of s.setup.params) {
                     if (x.paramIds.indexOf(p.id) < 0) continue;
-                    STA.library.limits.add(sim, car, { paramId: p.id, dir: x.dir, num: U.isNum(p.num) ? p.num : null, raw: p.raw, label: p.section + ' / ' + p.label });
+                    STA.library.limits.add(sim, car, Object.assign({ paramId: p.id, dir: x.dir, num: U.isNum(p.num) ? p.num : null, raw: p.raw, label: p.section + ' / ' + p.label }, linkedAt(s.setup, p, x.dir)));
                   }
                   again();
                 } })])) : null]),
@@ -623,6 +624,32 @@
     ]);
   }
 
+  /* A limit that depends on another setting (see car-limits.js). */
+  const deg = (n, unit) => +(+n).toFixed(2) + (unit ? ' ' + unit : '');
+  // { when } to store with a limit recorded now for setting p, or {} when p has no linked limit that way.
+  function linkedAt(setup, p, dir) {
+    const k = STA.carLimits.linkOf(setup, p, dir) || (p.link && p.link.dir === dir ? { other: setup.params.find((q) => q.id === p.link.otherId) } : null);
+    return k && k.other ? { when: { paramId: k.other.id, num: k.other.num, raw: k.other.raw } } : {};
+  }
+  function linkText(p) {
+    const k = p.link, unit = p.unit, word = k.dir === '+' ? 'maximum' : 'minimum';
+    const known = k.points.map((pt) => deg(pt.y, unit) + ' at ' + deg(pt.x, k.otherUnit)).join(', ');
+    return 'the ' + word + ' depends on the ' + k.otherName + '. Recorded: ' + known + '. '
+      + (k.known ? 'At ' + deg(k.at, k.otherUnit) + ' now: ' + deg(k.dir === '+' ? p.hi : p.lo, unit) + (k.estimated ? ' (estimate)' : '') + '.'
+        : 'Not known at ' + deg(k.at, k.otherUnit) + ': when the garage stops you, use "Not possible on this car" and it is kept for that ' + k.otherName + ' angle.');
+  }
+  // What a suggestion needs to say about linked limits on this car.
+  function linkNotes(setup, x) {
+    const out = [];
+    for (const p of setup.params) {
+      if (!p.link) continue;
+      const k = p.link, word = k.dir === '+' ? 'Max ' : 'Min ';
+      if (x.paramIds.indexOf(p.id) >= 0 && x.dir === k.dir) out.push(k.known ? word + deg(k.dir === '+' ? p.hi : p.lo, p.unit) + ' at ' + deg(k.at, k.otherUnit) + ' ' + k.otherName + (k.estimated ? ' (estimate)' : '') : 'Limit depends on the ' + k.otherName + '; not known at ' + deg(k.at, k.otherUnit));
+      else if (x.paramIds.indexOf(k.otherId) >= 0) out.push('The ' + STA.advisor.labelFor(p.role, p.axle).toLowerCase() + ' limit moves with the ' + k.otherName + ' on this car');
+    }
+    return Array.from(new Set(out));
+  }
+
   /* Known limits for the car, and a way to add or correct one. Collapsed until wanted. */
   function limitsPanel(s, adv) {
     const sim = s.meta.sim, car = s.meta.car, mine = STA.library.limits.list(sim, car), f = ui().limitForm || (ui().limitForm = { dir: '+', value: '' });
@@ -630,6 +657,7 @@
     const groups = new Map();
     for (const p of s.setup.params) {
       const unit = p.unit ? ' ' + p.unit : '', bits = [];
+      if (p.link) { const label = p.role && STA.advisor.ROLE[p.role] ? STA.advisor.labelFor(p.role, p.axle) : p.label; groups.set('link|' + p.id, { label, text: linkText(p), src: 'reported by a driver; yours are added' }); continue; }
       if (p.lo != null && p.loSrc !== 'set by you') bits.push('min ' + +p.lo.toFixed(2) + unit);
       if (p.hi != null && p.hiSrc !== 'set by you') bits.push('max ' + +p.hi.toFixed(2) + unit);
       if (!bits.length) continue;
@@ -644,7 +672,7 @@
       if (!p0 || !U.isNum(v)) return A().say('warn', 'Enter the limit as a number.');
       // The same setting on the other side of the car gets the same limit.
       for (const p of choices) if (p === p0 || (p.role && p.role === p0.role && p.axle === p0.axle && p.label === p0.label && p.unit === p0.unit)) {
-        STA.library.limits.add(sim, car, { paramId: p.id, dir: f.dir, num: v, raw: v + (p.unit ? ' ' + p.unit : ''), label: p.section + ' / ' + p.label });
+        STA.library.limits.add(sim, car, Object.assign({ paramId: p.id, dir: f.dir, num: v, raw: v + (p.unit ? ' ' + p.unit : ''), label: p.section + ' / ' + p.label }, linkedAt(s.setup, p, f.dir)));
       }
       f.value = ''; again();
     };
@@ -654,8 +682,8 @@
         : adv.car ? h('p', { class: 'hint' }, ['From ', h('a', { href: adv.car.url, target: '_blank', rel: 'noopener', text: 'iRacing\'s manual for the ' + adv.car.name }), ' unless marked. A limit you add replaces the built-in one.'])
         : h('p', { class: 'hint', text: 'None built in for this car. Add the ones you know.' }),
       groups.size ? h('ul', { class: 'plain' }, Array.from(groups.values()).map((g) => h('li', {}, [h('b', { text: g.label + ': ' }), g.text + ' (' + g.src + ')']))) : null,
-      mine.length ? h('ul', { class: 'plain' }, mine.map((e) => h('li', {}, [h('b', { text: e.label + ': ' }), (e.dir === '-' ? 'min ' : 'max ') + e.raw + ' (yours) ',
-        h('button', { class: 'link', type: 'button', text: 'Remove limit', onclick: () => { STA.library.limits.remove(sim, car, e.paramId, e.dir); again(); } })]))) : null,
+      mine.length ? h('ul', { class: 'plain' }, mine.map((e) => h('li', {}, [h('b', { text: e.label + ': ' }), (e.dir === '-' ? 'min ' : 'max ') + e.raw + (e.when ? ' at ' + e.when.raw + ' ' + ((s.setup.params.find((q) => q.id === e.when.paramId) || {}).role === 'rearWing' ? 'rear wing' : 'of the linked setting') : '') + ' (yours) ',
+        h('button', { class: 'link', type: 'button', text: 'Remove limit', onclick: () => { STA.library.limits.remove(sim, car, e.paramId, e.dir, e.when ? e.when.num : null); again(); } })]))) : null,
       choices.length ? h('div', { class: 'form' }, [
         h('label', { class: 'wide' }, ['Setting', h('select', { onchange: (ev) => { f.id = ev.target.value; } }, choices.map((p) => h('option', { value: p.id, selected: p.id === f.id, text: p.section + ' / ' + p.label + ' (now ' + p.raw + ')' })))]),
         h('label', {}, ['Rule', h('select', { onchange: (ev) => { f.dir = ev.target.value; } }, [h('option', { value: '+', selected: f.dir === '+', text: 'Cannot go above' }), h('option', { value: '-', selected: f.dir === '-', text: 'Cannot go below' })])]),

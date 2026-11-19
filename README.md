@@ -216,12 +216,22 @@ that is already outside the limit is the first thing the app tells you to fix.
   (`js/data/car-limits.js`) of limits taken from
   [iRacing's per-car user manuals](https://www.iracing.com/resources/user-manuals/):
   legal ride-height windows, spring-rate ranges, and the click ranges of anti-roll bars,
-  dampers, traction control, ABS and wings, for 43 cars. Each entry links the manual it
+  dampers, traction control, ABS and wings, for 44 cars. Each entry links the manual it
   came from, and the Setup advice tab shows the limits in force for the loaded car.
   A limit that only applies at one circuit (the 70 mm minimum ride height for GT3 cars on
   the Nürburgring Nordschleife) is only applied there.
 - **Reported by a driver.** A limit that is real but not in a manual is marked as such.
   The Super Formula Lights front ride height (no more than 20 mm) is one.
+- **A limit that depends on another setting.** On the Super Formula SF23 the only limit is
+  the front flap angle, and how high it can go depends on the rear wing angle: at 18.5 deg
+  of rear wing the flap stops at 24 deg (reported by a driver). The app keeps such a limit
+  as points, one per rear wing angle. It applies the limit at a recorded angle, draws a
+  straight line between two recorded angles (shown as an estimate), and assumes nothing
+  outside them: there the Limits panel says the limit is not known yet. When the garage
+  stops you at another rear wing angle, choose **Not possible on this car** on the
+  suggestion, or enter the value under "Limits for the …"; it is stored for that rear
+  wing angle. A suggestion to change the rear wing on this car carries a note that the
+  front flap limit moves with it.
 - **Your own limits.** Under "Limits for the …" on the Setup advice tab, pick a setting,
   choose "cannot go above" or "cannot go below" and enter the value. It is stored per car,
   applies to the same setting on both sides of the car, takes effect immediately in the
