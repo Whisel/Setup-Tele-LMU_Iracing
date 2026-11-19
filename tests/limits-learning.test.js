@@ -114,9 +114,10 @@ test('changes between two setups are read as role, axle and direction', () => {
   assert.deepStrictEqual(STA.learning.changesBetween(a, a), []);
 });
 
-test('a softer front bar that cures slow-corner understeer is judged to have helped, and is ranked up next time', async () => {
+test('a softer front bar that cures slow-corner understeer and makes the lap faster is judged to have helped, and is ranked up next time', async () => {
   const softer = SETUP_YAML.replace('ArbBlades: 3', 'ArbBlades: 2');
-  const before = await load({ understeer: 0.6 }, { file: 'before.ibt', setupName: 'v1.sto', startDate: 1767225600 });
+  // The understeering car is also slower through the slow corners, as it would be on track.
+  const before = await load({ understeer: 0.6, slowGrip: 0.93 }, { file: 'before.ibt', setupName: 'v1.sto', startDate: 1767225600 });
   const after = await load({ understeer: 0.0 }, { file: 'after.ibt', setupName: 'v2.sto', setupYaml: softer, startDate: 1767229200 });
   const sums = [record(before), record(after)], setups = [before.setup, after.setup];
   assert.ok(sums[0].balance.mid.low >= 0.25 && Math.abs(sums[1].balance.mid.low) < 0.1, 'the stored balance shows the problem, then its absence');
@@ -126,7 +127,10 @@ test('a softer front bar that cures slow-corner understeer is judged to have hel
   assert.strictEqual(rv.changes[0].key, 'arb|front|-');
   assert.ok(rv.changes[0].targets.length >= 1, 'it is matched to the understeer finding it is a usual answer to');
   assert.strictEqual(rv.changes[0].verdict, 'helped');
-  assert.strictEqual(rv.lap.word, 'same', 'equal lap times are not called faster or slower');
+  assert.deepStrictEqual([rv.changes[0].cause, rv.changes[0].time.word], ['asExpected', 'faster']);
+  assert.ok(rv.changes[0].time.net < -0.1 && rv.changes[0].time.parts.find((p) => p.zone === 'L').d < 0, 'time was gained in and around the slow corners: ' + rv.changes[0].time.text);
+  assert.strictEqual(rv.changes[0].time.zones, 'LMHBS', 'a bar acts on every corner, the braking into it and the straight out of it');
+  assert.match(rv.changes[0].rethink, /^As expected: 0\.\d\d s faster where it acts\.$/);
   assert.ok(STA.learning.review(sums, setups, before).first);
 
   const out = STA.learning.outcomes(sums, setups, { sim: 'iracing', car: 'Test GT3' });
@@ -136,7 +140,7 @@ test('a softer front bar that cures slow-corner understeer is judged to have hel
   const plain = STA.advisor.advise({ findings }, before.setup), learned = STA.advisor.advise({ findings }, before.setup, { outcomes: out });
   const pick = (adv) => adv.suggestions.find((x) => x.blockKey === 'arb|front|-');
   assert.ok(pick(learned).score > pick(plain).score);
-  assert.match(pick(learned).historyText, /On this car before: 1 helped\./);
+  assert.match(pick(learned).historyText, /On this car before: 1 helped\. About 0\.\d\d s a lap faster\./);
 });
 
 test('a change that twice fails to help is moved below the alternatives', async () => {
@@ -347,8 +351,12 @@ test('the driver can say what a change was for, and overrule the telemetry', () 
   const a = base(), b = moreWing();
   const before = run(a, 0.0, { balance: bal(0.0, -0.20) }), after = run(b, 0.0, { balance: bal(0.0, -0.05) });
   const blind = judged(before, after, a, b);
-  assert.deepStrictEqual([blind.why, blind.cause, blind.targets.length], ['unknown', 'lapOnly', 0]);
-  assert.match(blind.rethink, /No reason on record: lap unchanged\. Say what it was for\./);
+  assert.deepStrictEqual([blind.why, blind.purpose, blind.cause, blind.targets.length], ['pace', 'Grip in fast corners and under braking', 'lapOnly', 0], 'a wing change with no handling reason is read as made for pace');
+  assert.strictEqual(blind.rethink, 'Made for pace: lap unchanged.');
+  // a setting with no pace purpose and no handling reason is still asked about
+  const bias = setupFor('Test GT3', (y) => y.replace('BrakePressureBias: 54.0%', 'BrakePressureBias: 55.0%'));
+  const asked = judged(before, run(bias, 0.0, { balance: bal(0.0, -0.20) }), a, bias);
+  assert.deepStrictEqual([asked.why, asked.rethink], ['unknown', 'No reason on record: lap unchanged. Say what it was for.']);
   assert.ok(STA.learning.intentChoices(before).some((o) => o.value === 'g:oversteer|entry'));
 
   const told = judged(before, after, a, b, { 'rearWing|rear|+': { target: 'g:oversteer|entry' } });
@@ -373,7 +381,7 @@ test('an unexpected gain is credited to the change and offered for that problem 
   const a = base(), b = moreWing(), c = evenMoreWing();
   const r1 = run(a, 0.60), r2 = run(b, 0.30);
   const j = STA.learning.judge(r1, r2, a, b);
-  assert.strictEqual(j.changes[0].why, 'unknown', 'more rear wing is not a textbook answer to slow-corner understeer');
+  assert.strictEqual(j.changes[0].why, 'pace', 'more rear wing is not a textbook answer to slow-corner understeer, so it is read as a pace change');
   assert.deepStrictEqual(j.bonus.map((x) => [x.key, x.text, x.credit]), [['understeer|mid', '+60% → +30%', ['rearWing|rear|+']]]);
 
   const know = STA.learning.knowledge([r1, r2], [a, b], { sim: 'iracing', car: 'Test GT3' });
@@ -471,4 +479,126 @@ test('where the driver left off is remembered per car and track', () => {
   assert.deepStrictEqual(R.get('iracing|sfl|okayama').overlay, [{ f: 'f:a.ibt', n: 4, ref: true }]);
   assert.strictEqual(R.get('nothing'), null);
   R.clear();
+});
+
+/* ---------- lap time is the yardstick ---------- */
+
+test('pace profile: the zones add up to the lap, and a comparison adds up to the lap time difference', async () => {
+  const a = await load({ laps: 4, grips: [1, 1, 1, 1] }, { file: 'a.ibt', startDate: 1767225600 });
+  const b = await load({ laps: 4, grips: [1, 1, 1, 1], vTop: 81, fastGrip: 0.96 }, { file: 'b.ibt', startDate: 1767229200 });
+  const pa = STA.pace.profile(a), pb = STA.pace.profile(b);
+  assert.ok(Math.abs(pa.t.reduce((x, y) => x + y, 0) / 1000 - a.bestLap.time) < 0.25, 'cell times sum to the lap');
+  assert.strictEqual(pa.zone.length, pa.t.length);
+  const sh = STA.pace.shares(pa);
+  assert.ok(Math.abs(sh.S + sh.B + sh.L + sh.M + sh.H - 1) < 1e-9);
+  assert.ok(sh.S > 0.3 && sh.B > 0.05 && sh.L > 0.01 && sh.M > 0.03 && sh.H > 0.05, 'every kind of zone is found on this track: ' + JSON.stringify(sh));
+  assert.ok(pa.top > 60 && pa.top < 78.5 && pb.top - pa.top > 1, 'top speed went up: ' + pa.top + ' to ' + pb.top);
+  const d = STA.pace.delta(pa, pb);
+  assert.ok(Math.abs(d.lap - (b.bestLap.time - a.bestLap.time)) < 0.05, 'zone differences sum to the lap time difference: ' + d.lap + ' vs ' + (b.bestLap.time - a.bestLap.time));
+  assert.ok(d.zones.S < -0.08, 'less drag: faster on the straights (' + d.zones.S.toFixed(3) + ')');
+  assert.ok(d.zones.H > 0.015, 'less downforce: slower in the fast corners (' + d.zones.H.toFixed(3) + ')');
+  assert.ok(Math.abs(d.zones.L) < 0.02, 'slow corners are untouched (' + d.zones.L.toFixed(3) + ')');
+  assert.strictEqual(STA.pace.delta(pa, { cell: 10, t: pa.t.slice(0, 100), zone: pa.zone.slice(0, 100), top: 70 }), null, 'a lap of a different length is not compared');
+  assert.strictEqual(STA.pace.delta(pa, null), null);
+});
+
+test('taking wing off is judged on lap time: credited for the straights, charged for the fast corners', async () => {
+  const lessWing = SETUP_YAML.replace('RearWingSetting: 5', 'RearWingSetting: 3');
+  const base = { laps: 4, grips: [1, 1, 1, 1] };
+  const before = await load(base, { file: '1.ibt', setupName: 'v1.sto', startDate: 1767225600 });
+  // a good trade here: more speed at the end of the straights for a little fast-corner grip
+  const good = await load(Object.assign({ vTop: 81, fastGrip: 0.96 }, base), { file: '2.ibt', setupName: 'v2.sto', setupYaml: lessWing, startDate: 1767229200 });
+  const sums = [record(before), record(good)], setups = [before.setup, good.setup];
+  const rv = STA.learning.review(sums, setups, good), c = rv.changes[0];
+  assert.deepStrictEqual([c.key, c.why, c.purpose, c.verdict, c.cause], ['rearWing|rear|-', 'pace', 'Top speed and time on the straights', 'helped', 'paceGain']);
+  assert.strictEqual(c.time.zones, 'SHB');
+  assert.ok(c.time.net < -0.05 && c.time.parts.find((p) => p.zone === 'S').d < 0 && c.time.parts.find((p) => p.zone === 'H').d > 0, c.time.text);
+  assert.ok(c.top.d > 1, 'top speed went up: ' + c.top.d);
+  assert.match(c.rethink, /^Worth 0\.\d\d s a lap here\.$/);
+  assert.match(c.time.text, /^straights −0\.\d\d s/);
+  const know = STA.learning.knowledge(sums, setups, { sim: 'iracing', car: 'Test GT3' });
+  const line = know.relay.find((x) => /Take off rear wing 5 → 3 at Test Ring/.test(x.text));
+  assert.ok(line && line.kind === 'works', JSON.stringify(know.relay));
+  assert.match(line.text, /0\.\d\d s a lap faster \(straights −0\.\d\d s/);
+  assert.deepStrictEqual([know.stats.get('rearWing|rear|-').helped, know.stats.get('rearWing|rear|-').timed], [1, 1]);
+
+  // a bad trade: hardly any more top speed, a lot less grip in the fast corners
+  const bad = await load(Object.assign({ vTop: 78.4, fastGrip: 0.93 }, base), { file: '3.ibt', setupName: 'v3.sto', setupYaml: lessWing, startDate: 1767229200 });
+  const rv2 = STA.learning.review([sums[0], record(bad)], [before.setup, bad.setup], bad), c2 = rv2.changes[0];
+  assert.deepStrictEqual([c2.verdict, c2.cause], ['hurt', 'paceLoss']);
+  assert.match(c2.rethink, /^Cost 0\.\d\d s a lap here\. Put it back\.$/);
+});
+
+test('a problem that got smaller without the lap getting faster is not counted as having helped, nor held against the change', async () => {
+  const softer = SETUP_YAML.replace('ArbBlades: 3', 'ArbBlades: 2'), softest = SETUP_YAML.replace('ArbBlades: 3', 'ArbBlades: 1');
+  const base = { laps: 4, grips: [1, 1, 1, 1] };
+  const runs = [
+    await load(Object.assign({ understeer: 0.6 }, base), { file: '1.ibt', setupName: 'v1.sto', startDate: 1767225600 }),
+    await load(Object.assign({ understeer: 0.0 }, base), { file: '2.ibt', setupName: 'v2.sto', setupYaml: softer, startDate: 1767229200 }),
+  ];
+  const sums = runs.map(record), setups = runs.map((r) => r.setup);
+  const c = STA.learning.review(sums, setups, runs[1]).changes[0];
+  assert.deepStrictEqual([c.verdict, c.cause, c.time.word], ['none', 'notTheLimit', 'same']);
+  assert.match(c.rethink, /Problem smaller, lap no faster/);
+  const know = STA.learning.knowledge(sums, setups, { sim: 'iracing', car: 'Test GT3' });
+  const st = know.stats.get('arb|front|-');
+  assert.deepStrictEqual([st.helped, st.none, st.dead], [0, 1, 0]);
+  assert.ok(know.relay.some((x) => /reduces mid-corner understeer, but the lap was no faster/.test(x.text)), JSON.stringify(know.relay.map((x) => x.text)));
+  // two such results do not push the change to the bottom of the list
+  st.none = 2; st.tried = 2; st.by['understeer|mid'].none = 2; st.by['understeer|mid'].tried = 2;
+  const adv = STA.advisor.advise({ findings: [Object.assign({ confidence: 'medium' }, usMidLow)] }, runs[0].setup, { outcomes: know.stats });
+  assert.ok(!adv.suggestions.find((x) => x.blockKey === 'arb|front|-').demoted);
+});
+
+test('the wing level is its own lap-time question: every level tried is compared on lap time; experiment only on a fast track', async () => {
+  const lessWing = SETUP_YAML.replace('RearWingSetting: 5', 'RearWingSetting: 3');
+  const base = { laps: 4, grips: [1, 1, 1, 1] };
+  const before = await load(base, { file: '1.ibt', setupName: 'v1.sto', startDate: 1767225600 });
+  const good = await load(Object.assign({ vTop: 81, fastGrip: 0.96 }, base), { file: '2.ibt', setupName: 'v2.sto', setupYaml: lessWing, startDate: 1767229200 });
+  const bad = await load(Object.assign({ vTop: 78.4, fastGrip: 0.93 }, base), { file: '3.ibt', setupName: 'v3.sto', setupYaml: lessWing, startDate: 1767229200 });
+  const q = { sim: 'iracing', car: 'Test GT3' }, here = { shares: { S: 0.4, B: 0.15, L: 0.1, M: 0.15, H: 0.2 }, track: good.trackName };
+  const wing = (adv) => adv.suggestions.find((x) => x.targetKey === 'pace');
+
+  const gained = STA.learning.knowledge([record(before), record(good)], [before.setup, good.setup], q);
+  const more = wing(STA.advisor.advise({ findings: [] }, good.setup, { outcomes: gained.stats, pace: here }));
+  assert.deepStrictEqual([more.blockKey, more.reasons, more.confidence], ['rearWing|rear|-', ['Lap time'], 'low'], 'a gain under 0.15 s from one run is low confidence');
+  assert.match(more.effect, /^Wing 3 is 0\.\d\d s a lap faster than 5 here\. One more step the same way may gain again; judge it on lap time\.$/);
+  // looking back at the run on the old level, the same lap times point the same way
+  const old = wing(STA.advisor.advise({ findings: [] }, before.setup, { outcomes: gained.stats, pace: here }));
+  assert.strictEqual(old.blockKey, 'rearWing|rear|-');
+  assert.match(old.effect, /^Wing 3 was 0\.\d\d s a lap faster than 5 here\. This goes back toward it\.$/);
+  assert.strictEqual(old.historyText, undefined, 'the lap times are the history; not counted twice');
+  // at another track that result says nothing, and this one is not fast enough to try it blind
+  assert.strictEqual(wing(STA.advisor.advise({ findings: [] }, good.setup, { outcomes: gained.stats, pace: Object.assign({}, here, { track: 'Somewhere Else' }) })), undefined);
+
+  // a third level, slower again: 3 is now the best of three, so no further step is offered from it, in any of the runs
+  const far = await load(Object.assign({ vTop: 80, fastGrip: 0.9 }, base), { file: '2b.ibt', setupName: 'v2b.sto', setupYaml: SETUP_YAML.replace('RearWingSetting: 5', 'RearWingSetting: 1'), startDate: 1767232800 });
+  const three = STA.learning.knowledge([record(before), record(good), record(far)], [before.setup, good.setup, far.setup], q);
+  assert.strictEqual(wing(STA.advisor.advise({ findings: [] }, good.setup, { outcomes: three.stats, pace: here })), undefined, 'slower both ways: stay');
+  const fromFar = wing(STA.advisor.advise({ findings: [] }, far.setup, { outcomes: three.stats, pace: here }));
+  assert.deepStrictEqual([fromFar.blockKey, fromFar.confidence], ['rearWing|rear|+', 'medium'], 'a clear gap from clean runs is medium');
+  assert.match(fromFar.effect, /^Wing 3 was 0\.\d\d s a lap faster than 1 here\. This goes back toward it\.$/);
+  assert.match(wing(STA.advisor.advise({ findings: [] }, before.setup, { outcomes: three.stats, pace: here })).effect, /^Wing 3 was 0\.\d\d s a lap faster than 5 here/);
+
+  const lost = STA.learning.knowledge([record(before), record(bad)], [before.setup, bad.setup], q);
+  const back = wing(STA.advisor.advise({ findings: [] }, bad.setup, { outcomes: lost.stats, pace: here }));
+  assert.strictEqual(back.blockKey, 'rearWing|rear|+');
+  assert.match(back.effect, /^Wing 5 was 0\.\d\d s a lap faster than 3 here\. This goes back toward it\.$/);
+  // back on 5, with 3 known to be slower and nothing above tried: the same lap times say more wing may gain again
+  const up = wing(STA.advisor.advise({ findings: [] }, before.setup, { outcomes: lost.stats, pace: here }));
+  assert.strictEqual(up.blockKey, 'rearWing|rear|+');
+  assert.match(up.effect, /^Wing 5 is 0\.\d\d s a lap faster than 3 here\. One more step the same way/);
+
+  // never tried: offered as an experiment only when half the lap or more is on the straights, and the rear is stable
+  const fast = { shares: { S: 0.56, B: 0.14, L: 0.05, M: 0.05, H: 0.2 }, track: 'Fast Track' };
+  const trial = wing(STA.advisor.advise({ findings: [] }, before.setup, { pace: fast }));
+  assert.deepStrictEqual([trial.blockKey, trial.confidence], ['rearWing|rear|-', 'low']);
+  assert.match(trial.effect, /^An experiment: 56% of this lap is on the straights\. Judge it on lap time/);
+  assert.strictEqual(wing(STA.advisor.advise({ findings: [] }, before.setup, { pace: here })), undefined);
+  const loose = [{ id: 'os-entry-high', kind: 'oversteer', phase: 'entry', band: 'high', title: 'Corner entry oversteer in fast corners', severity: 0.6, confidence: 'medium' }];
+  const adv = STA.advisor.advise({ findings: loose }, before.setup, { pace: fast });
+  assert.strictEqual(wing(adv), undefined, 'not with a loose rear in fast corners');
+  assert.ok(adv.suggestions.some((x) => x.blockKey === 'rearWing|rear|+'), 'the handling need for more wing stands');
+  // and it can be contested like any other change
+  assert.strictEqual(wing(STA.advisor.advise({ findings: [] }, before.setup, { pace: fast, contested: contest(['rearWing|rear|-', 'tradeoff']) })), undefined);
 });

@@ -291,9 +291,83 @@
     if (!st || !st.tried) return;
     s.history = st;
     s.score *= U.clamp(1 + 0.3 * (st.helped - st.hurt) - 0.15 * st.none, 0.4, 1.6);
-    if (st.helped === 0 && st.hurt + st.none >= 2) s.demoted = true;
+    // Lap time gained where the change acts counts on top: a tenth of a second is worth a fifth more.
+    const avg = st.timed ? st.time / st.timed : null;
+    if (avg != null) s.score *= U.clamp(1 - 2 * avg, 0.6, 1.5);
+    // Only results that showed no effect at all count against it; "problem smaller but no time gained" does not.
+    if (st.helped === 0 && st.hurt + (st.dead != null ? st.dead : st.none) >= 2) s.demoted = true;
     const n = (k, word) => (k ? k + ' ' + word : null);
-    s.historyText = 'On this car before: ' + [n(st.helped, 'helped'), n(st.none, 'no effect'), n(st.hurt, 'worse')].filter(Boolean).join(', ') + (s.demoted ? '. Listed last.' : '.');
+    s.historyText = 'On this car before: ' + [n(st.helped, 'helped'), n(st.none, 'no effect'), n(st.hurt, 'worse')].filter(Boolean).join(', ') + (s.demoted ? '. Listed last.' : '.')
+      + (avg != null && Math.abs(avg) >= 0.03 ? ' About ' + Math.abs(avg).toFixed(2) + ' s a lap ' + (avg < 0 ? 'faster' : 'slower') + '.' : '');
+  }
+
+  /* The wing level is a lap-time question, not a handling one, so it gets its own entry:
+     - the last wing step at this track gained time: offer another the same way
+     - it cost time: offer the step back
+     - never tried here, and half the lap or more is on the straights: offer one step less as an experiment
+     pace: { shares: { S, B, L, M, H }, track, when }.  Returns a finding-like object, or null.
+     Only wing steps made up to this session count (when), so looking back at an older run
+     does not answer with something learned later from a different wing level. */
+  function paceFinding(analysis, setup, outcomes, pace) {
+    if (!pace || !pace.track) return null;
+    const num = (v) => { const n = parseFloat(v); return isFinite(n) ? n : null; };
+    const trials = [];
+    for (const dir of ['-', '+']) {
+      const st = outcomes && outcomes.get(blockKey('rearWing', 'rear', dir));
+      for (const t of (st && st.trials) || []) {
+        if (t.net == null || !STA.library || !STA.library.sameTrack(t.track, pace.track)) continue;
+        if (t.cause !== 'paceGain' && t.cause !== 'paceLoss' && t.cause !== 'paceEven') continue;
+        trials.push(Object.assign({ dir, a: num(t.from), b: num(t.to) }, t));
+      }
+    }
+    trials.sort((x, y) => x.when - y.when);
+    const COST = { '-': 'Less grip in fast corners and under braking.', '+': 'More drag: lower top speed.' };
+    const base = { id: 'pace-wing', kind: 'pace', title: 'Lap time', severity: 0.45 };
+    const secs = (v) => Math.abs(v).toFixed(2) + ' s a lap';
+    if (!trials.length) {
+      // Never tried here: an experiment, only where the straights are half the lap and the rear is stable.
+      const unstable = analysis.findings.some((f) => (f.kind === 'oversteer' && f.band === 'high') || f.kind === 'rearLock');
+      if (!pace.shares || pace.shares.S < 0.5 || unstable) return null;
+      return Object.assign(base, { severity: 0.25, confidence: 'low',
+        option: o('rearWing', 'rear', '-', 'An experiment: ' + Math.round(pace.shares.S * 100) + '% of this lap is on the straights. Judge it on lap time in the next run, not on feel.', COST['-']) });
+    }
+    // Lap time of every wing level tried at this track, against the first one. Each trial links two levels.
+    const level = new Map(), shaky = new Set();
+    for (const t of trials) {
+      if (t.a == null || t.b == null) continue;
+      if (level.has(t.a)) level.set(t.b, level.get(t.a) + t.net);
+      else if (level.has(t.b)) level.set(t.a, level.get(t.b) - t.net);
+      else { level.clear(); shaky.clear(); level.set(t.a, 0); level.set(t.b, t.net); }
+      if (t.shared) { shaky.add(t.a); shaky.add(t.b); }
+    }
+    const wp = SU().byRole(setup, 'rearWing', 'rear')[0] || SU().byRole(setup, 'rearWing')[0];
+    const now = wp ? (U.isNum(wp.num) ? wp.num : num(wp.raw)) : null;
+    if (now == null || !level.has(now)) return null; // a level with no lap time on record: nothing to go on
+    const SIG = 0.05, at = level.get(now);
+    let best = now;
+    for (const [lv, t] of level) if (t < level.get(best)) best = lv;
+    // A gap of three times the noise floor from clean runs is medium; smaller, or shared with other changes, is low.
+    const conf = (lv, gap) => (shaky.has(lv) || shaky.has(now) || gap < 3 * SIG ? 'low' : 'medium');
+    if (at - level.get(best) >= SIG) {
+      const dir = best < now ? '-' : '+';
+      return Object.assign(base, { confidence: conf(best, at - level.get(best)),
+        option: o('rearWing', 'rear', dir, 'Wing ' + best + ' was ' + secs(at - level.get(best)) + ' faster than ' + now + ' here. This goes back toward it.', COST[dir]) });
+    }
+    // On the best level tried. Go on only where the gain came from one side and the other is untried.
+    const lower = Array.from(level.keys()).filter((lv) => lv < now), higher = Array.from(level.keys()).filter((lv) => lv > now);
+    const nearest = (list, pick) => (list.length ? pick.apply(null, list) : null);
+    const hi = nearest(higher, Math.min), lo = nearest(lower, Math.max);
+    const up = hi == null ? null : level.get(hi) - at, down = lo == null ? null : level.get(lo) - at;
+    const on = (other, gap) => 'Wing ' + now + ' is ' + secs(gap) + ' faster than ' + other + ' here. One more step the same way may gain again; judge it on lap time.';
+    if (up != null && down == null && up >= SIG) {
+      return Object.assign(base, { confidence: conf(hi, up),
+        option: o('rearWing', 'rear', '-', on(hi, up), COST['-']) });
+    }
+    if (down != null && up == null && down >= SIG) {
+      return Object.assign(base, { confidence: conf(lo, down),
+        option: o('rearWing', 'rear', '+', on(lo, down), COST['+']) });
+    }
+    return null; // slower both ways, or no real difference: leave the wing where it is
   }
 
   /* findings + the setup on the car -> ordered suggestions.
@@ -303,7 +377,8 @@
      opts.outcomes: Map of "role|axle|dir" -> { tried, helped, none, hurt } from earlier sessions.
      opts.contested: Map of "role|axle|dir" -> { reason } for changes the driver has contested.
      opts.learned:  Map of problem ("understeer|mid") -> [{ role, axle, dir, n }], changes that cut that
-                    problem on this car although they are not a textbook answer to it (see learning.js). */
+                    problem on this car although they are not a textbook answer to it (see learning.js).
+     opts.pace:     { shares, track } of this session's best lap, for the wing-level entry (see paceFinding). */
   function advise(analysis, setup, opts) {
     const suggestions = [], skipped = [], exhausted = [], byKey = new Map();
     const blocked = { blocked: (opts && opts.blocked) || null, limits: (opts && opts.limits) || null, contested: (opts && opts.contested) || null };
@@ -312,12 +387,14 @@
     const violations = fixViolations(setup, suggestions, byKey);
 
     const outs = (opts && opts.outcomes) || null, learned = (opts && opts.learned) || null;
-    for (const f of analysis.findings) {
+    // Handling findings first; the wing-level question last, so a handling need for the wing wins.
+    const wing = paceFinding(analysis, setup, outs, opts && opts.pace);
+    for (const f of analysis.findings.concat(wing ? [wing] : [])) {
       const tk = STA.learning ? STA.learning.targetKey(f) : null;
       // What this car has taught the app comes before the general rules.
       const own = ((learned && tk && learned.get(tk)) || []).map((e) => ({ role: e.role, axle: e.axle, dir: e.dir, learned: e.n, lone: true,
         effect: 'Cut this problem on this car before (' + e.n + (e.n === 1 ? ' run' : ' runs') + '). Learned from your own runs; not a textbook answer.', cost: 'Based on your runs only' }));
-      const list = own.concat(ruleFor(f));
+      const list = f.option ? [Object.assign({ lone: true }, f.option)] : own.concat(ruleFor(f));
       let taken = 0;
       const unavailable = [], contestedHere = [];
       // A suggestion that stands in for a contested one says so.
@@ -362,7 +439,8 @@
       // Every setup route contested or unavailable: what is left is the driving.
       if (!taken && contestedHere.length) exhausted.push({ finding: f.title, contested: Array.from(new Set(contestedHere)), tips: STA.technique ? STA.technique.forFinding(f) : [] });
     }
-    for (const s of suggestions) if (!s.fix) applyHistory(s, opts && opts.outcomes);
+    // The wing-level entry is already built from the lap times on record, so its history is not counted twice.
+    for (const s of suggestions) if (!s.fix && !(s.findingIds.length === 1 && s.findingIds[0] === 'pace-wing')) applyHistory(s, opts && opts.outcomes);
     // Limit fixes first, then first-choice fixes, then the alternatives; changes that have not worked on this car go last.
     const tier = (s) => (s.fix ? 3 : s.demoted ? 0 : s.primary ? 2 : 1);
     suggestions.sort((a, b) => tier(b) - tier(a) || b.score - a.score);

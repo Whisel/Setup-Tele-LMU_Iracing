@@ -101,7 +101,10 @@
     const sim = session.meta.sim, car = session.meta.car;
     // What earlier sessions with this car say about each kind of change.
     const know = STA.learning.knowledge(state.summaries, state.setups, { sim, car }, STA.library.reasons.all()), outcomes = know.stats;
-    return { an, outcomes, know, adv: STA.advisor.advise(an, session.setup, { learned: know.links, blocked: STA.library.blocked.set(sim, car), limits: STA.library.limits.map(sim, car), contested: STA.library.contested.map(sim, car), track: session.trackName, outcomes }) };
+    // This session's best lap as a pace profile: where the lap time is spent.
+    if (!an.pace) an.pace = STA.pace.profile(session, an.balance ? an.balance.gmax : null) || {};
+    const pace = an.pace.t ? { shares: STA.pace.shares(an.pace), track: session.trackName, when: session.meta.recordedAt } : null;
+    return { an, outcomes, know, pace, adv: STA.advisor.advise(an, session.setup, { pace, learned: know.links, blocked: STA.library.blocked.set(sim, car), limits: STA.library.limits.map(sim, car), contested: STA.library.contested.map(sim, car), track: session.trackName, outcomes }) };
   }
 
   /* Driving-technique analysis, cached per session. */

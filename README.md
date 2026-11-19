@@ -255,6 +255,42 @@ for exit oversteer, squeeze the throttle and take a gear higher; and so on. Use 
 a setup change did not do what was expected, when the setting you need is at its limit, or
 in a fixed-setup series.
 
+## Lap time is the yardstick
+
+The goal is a faster lap, so that is what every change is measured against.
+
+- **Pace profile.** Each session's best lap is kept as the time taken over every 10 m,
+  tagged with what the car was doing there: straight, braking, slow corner (under
+  100 km/h), medium corner or fast corner (over 160 km/h), plus the top speed.
+- **Where the lap moved.** Two runs of the same car and track are laid over each other:
+  "straights -0.31 s, fast corners +0.08 s, top speed +6 km/h". The zones come from the
+  earlier lap, so both are measured over the same pieces of track.
+- **Each change is judged where it acts.** Wing: straights, fast corners and braking.
+  Brakes: braking. Differential and traction control: slow and medium corners and the
+  straight after them. Springs, bars, dampers, geometry and pressures: every corner, the
+  braking into it and the straight out of it. When the wing was changed in the same run,
+  time on the straights is credited to the wing.
+- **Result = time.** Helped means faster where the change acts; worse means slower. A
+  handling problem that got smaller without the lap getting faster is reported as exactly
+  that, not as having helped, and it is not held against the change either.
+- **A wing change is a pace change.** Unless it answers a handling problem found in the
+  earlier run, or you say otherwise, taking wing off is read as "top speed and time on
+  the straights" and judged on the trade: what the straights gained against what the
+  fast corners and braking lost.
+- **The wing level gets its own entry in "Changes to make".** Every wing level run at this
+  track is kept with its lap time against the others. On a slower level it offers the step
+  back toward the fastest one ("Wing 3 was 0.47 s a lap faster than 1 here"). On the
+  fastest level it offers one more step the same way only while the other side is
+  untried; once it is slower both ways it offers nothing. Where the wing has never been
+  changed here, half the lap or more is on the straights and the rear is stable in fast
+  corners, it offers one step less as an experiment.
+
+What to keep in mind: this compares one best lap with another, so a better-driven lap or
+a cooler track shows up as time gained too. Time is counted where it shows on the track,
+and a slow corner costs time on the straight after it as well as in the corner. Sessions
+loaded before this was added have no pace profile until their file is opened again; they
+are judged on overall lap time as before.
+
 ## Learning from your sessions
 
 Every session you load leaves a short record in the library: the balance in each corner

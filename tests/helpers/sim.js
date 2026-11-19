@@ -21,13 +21,22 @@ function buildTrack() {
   return { ds: 0.5, n, kappa: k2, length: n * 0.5, radii: r };
 }
 
-/* Limit speed profile for one lap; grip scales cornering and braking. */
-function speedProfile(track, grip) {
-  const { n, kappa, ds } = track, vTop = 78, aLat = 1.9 * G * grip, aBrk = 1.6 * G * grip;
+/* Limit speed profile for one lap; grip scales cornering and braking.
+   car.vTop: top speed (m/s). car.slowGrip / car.fastGrip scale cornering grip in the slow
+   corners (under 28 m/s) and the fast ones (over 45 m/s): less wing is a higher vTop with a
+   lower fastGrip; an understeering car is a lower slowGrip. */
+function speedProfile(track, grip, car) {
+  car = car || {};
+  const { n, kappa, ds } = track, vTop = car.vTop || 78, aLat = 1.9 * G * grip, aBrk = 1.6 * G * grip;
   const v = new Float64Array(n);
-  for (let i = 0; i < n; i++) v[i] = Math.min(vTop, Math.abs(kappa[i]) > 1e-6 ? Math.sqrt(aLat / Math.abs(kappa[i])) : vTop);
+  for (let i = 0; i < n; i++) {
+    const k = Math.abs(kappa[i]);
+    if (k <= 1e-6) { v[i] = vTop; continue; }
+    const v0 = Math.sqrt(aLat / k), scale = v0 < 28 ? (car.slowGrip || 1) : v0 > 45 ? (car.fastGrip || 1) : 1;
+    v[i] = Math.min(vTop, Math.sqrt(aLat * scale / k));
+  }
   for (let pass = 0; pass < 2; pass++) {
-    for (let i = 0; i < n; i++) { const p = v[(i - 1 + n) % n], acc = 6.5 * (1 - p / 95); v[i] = Math.min(v[i], Math.sqrt(p * p + 2 * acc * ds)); }
+    for (let i = 0; i < n; i++) { const p = v[(i - 1 + n) % n], acc = 6.5 * (1 - p / (vTop + 17)); v[i] = Math.min(v[i], Math.sqrt(p * p + 2 * acc * ds)); }
     for (let i = n - 1; i >= 0; i--) { const q = v[(i + 1) % n]; v[i] = Math.min(v[i], Math.sqrt(q * q + 2 * aBrk * ds)); }
   }
   return v;
@@ -47,13 +56,13 @@ function drive(opts) {
   const out = { t: [], dist: [], lap: [], v: [], kap: [], x: [], y: [], ax: [], lastLap: [] };
   const trueLaps = [], cross = [];
   let t = 0, nextSample = 0, lapNo = 0, lapStartT = null, lastLapTime = 0, lastLapShownAt = Infinity, shown = 0;
-  let prof = speedProfile(track, opts.grips[0]);
+  let prof = speedProfile(track, opts.grips[0], opts);
   for (let p = 0; p < totalPts; p++) {
     const i = (startAt + p) % n, i2 = (i + 1) % n;
     if (i === 0 && p > 0) {
       if (lapStartT != null) { trueLaps.push(t - lapStartT); lastLapTime = t - lapStartT; lastLapShownAt = t + 1.2; }
       cross.push(t); lapStartT = t; lapNo++;
-      prof = speedProfile(track, opts.grips[lapNo % opts.grips.length]);
+      prof = speedProfile(track, opts.grips[lapNo % opts.grips.length], opts);
     }
     const v0 = Math.max(5, prof[i]), v1 = Math.max(5, prof[i2]), dt = ds / ((v0 + v1) / 2);
     while (nextSample <= t + dt) {

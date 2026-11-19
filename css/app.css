@@ -315,3 +315,4 @@ table.review .verdict { display: block; margin-bottom: 3px; }
 .rec-controls { display: flex; gap: 6px; flex-wrap: wrap; }
 .rec-controls:empty { display: none; }
 .recorder .check { font-size: 12.5px; }
+.moved { font-size: 13.5px; }

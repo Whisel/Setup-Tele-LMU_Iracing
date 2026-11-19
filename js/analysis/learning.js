@@ -9,9 +9,12 @@
      why       what the change was for. Inferred from the general rules (it is a
                usual answer to a finding in the earlier session), or stated by
                the driver when the app asks.
-     expected  that problem gets smaller and the lap is no slower.
-     got       how the measure actually moved.
-     result    helped, no clear difference, or worse.
+     expected  the lap gets faster where the change acts (see pace.js), and the
+               problem it was aimed at gets smaller.
+     got       time gained or lost where it acts, and how the problem moved.
+     result    helped (faster), no clear difference, or worse (slower). Lap time
+               decides: a problem that got smaller without the lap getting
+               faster is not counted as having helped.
      rethink   when the expectation was not met, the most likely reason: step
                too small, this setting does not drive the problem on this car,
                it went the wrong way, it is the driving, or the problem was not
@@ -44,7 +47,7 @@
     'oversteer|entry': 'entry oversteer', 'oversteer|mid': 'mid-corner oversteer', 'oversteer|exit': 'exit oversteer',
     frontLock: 'front locking', rearLock: 'rear locking', wheelspin: 'wheelspin', traction: 'exit traction', bottoming: 'bottoming',
     camberTooMuch: 'too much camber', camberTooLittle: 'too little camber', pressureHigh: 'high tyre pressure', pressureLow: 'low tyre pressure',
-    brakeHot: 'brake temperature', limiter: 'hitting the limiter', lap: 'lap time',
+    brakeHot: 'brake temperature', limiter: 'hitting the limiter', lap: 'lap time', pace: 'lap time',
   };
   const targetText = (k) => TARGET_TEXT[k] || k;
   const lower = (t) => String(t || '').replace(/^./, (c) => c.toLowerCase());
@@ -53,7 +56,7 @@
   function snapshot(session, an, tech) {
     const timed = session.laps.filter((l) => l.complete && l.valid).map((l) => l.time).sort((a, b) => a - b);
     const near = timed.filter((t) => t <= timed[0] * 1.03);
-    const out = { v: 3, medianLap: near.length ? U.median(near) : null, lapSpread: near.length >= 3 ? U.std(near) : null, findings: [], balance: null, metrics: {}, habits: [] };
+    const out = { v: 4, prof: STA.pace ? STA.pace.profile(session, an && an.balance ? an.balance.gmax : null) : null, medianLap: near.length ? U.median(near) : null, lapSpread: near.length >= 3 ? U.std(near) : null, findings: [], balance: null, metrics: {}, habits: [] };
     if (!an) return out;
     out.findings = an.findings.map((f) => ({ id: f.id, kind: f.kind, phase: f.phase, band: f.band, axle: f.axle, title: f.title, severity: +f.severity.toFixed(3) }));
     out.tendencies = out.findings; // name used by the baseline builder
@@ -179,18 +182,28 @@
   }
 
   const RETHINK = {
-    asExpected: () => 'As expected.',
+    asExpected: (c) => (c.time ? 'As expected: ' + sec(c.time.net) + ' faster where it acts.' : 'As expected.'),
     overshot: () => 'Worked, but too far. Go back half the step.',
     notTheLimit: () => 'Problem smaller, lap no faster: it was not what was costing time.',
+    paceGain: (c) => 'Worth ' + sec(c.time.net) + ' a lap here.',
+    paceLoss: (c) => 'Cost ' + sec(c.time.net) + ' a lap here. Put it back.',
+    paceEven: () => 'No net lap time: what one part of the lap gained, another gave back.',
+    timeOnly: (c) => sec(c.time.net) + ' faster where it acts, though the problem it was aimed at did not move.',
+    fixedButSlower: (c) => 'Problem smaller, but ' + sec(c.time.net) + ' slower where it acts. Not worth it.',
+    slower: (c) => sec(c.time.net) + ' slower where it acts, and the problem did not move. Put it back.',
     wrongWay: () => 'Went the wrong way. Put it back; the usual reasoning does not hold here.',
     tooSmall: () => 'Right direction, too small. Try a bigger step.',
     driver: (c) => 'No change, and your laps show ' + lower(c.habit) + ': likely the driving.',
     noLever: (c) => 'No change: this setting does not drive it on this car.' + (c.next ? ' Next: ' + lower(c.next) + '.' : ''),
     unmeasured: () => 'Not measured in these runs, so it cannot be judged.',
     notSeen: () => 'The telemetry did not show that problem before the change, so it has nothing to compare. Give your own verdict.',
-    lapOnly: (c, lap) => (c.why === 'none' ? 'No target' : 'No reason on record') + ': lap ' + (lap.word === 'same' ? 'unchanged' : lap.word) + '.' + (c.why === 'none' ? '' : ' Say what it was for.'),
+    lapOnly: (c, lap) => (c.why === 'none' ? 'No target' : c.why === 'pace' ? 'Made for pace' : 'No reason on record') + ': '
+      + (c.time ? (c.time.word === 'same' ? 'no time change where it acts' : sec(c.time.net) + ' ' + c.time.word + ' where it acts') : 'lap ' + (lap.word === 'same' ? 'unchanged' : lap.word))
+      + '.' + (c.why === 'unknown' ? ' Say what it was for.' : ''),
     yourCall: (c) => 'Your call' + (c.auto && c.auto !== c.verdict ? ' (telemetry said ' + ({ helped: 'helped', none: 'no clear difference', hurt: 'worse' })[c.auto] + ')' : '') + '.',
   };
+
+  const sec = (v) => Math.abs(v).toFixed(2) + ' s';
 
   /* Judge every change between two session records of the same car and track.
      notes:   { [changeKey]: { target, verdict } }, what the driver has said about this pair.
@@ -205,6 +218,8 @@
     const noise = Math.max(0.003, ((before.lapSpread || 0) + (after.lapSpread || 0)) / 2 / (paceB || 1));
     const lap = { before: paceB, after: paceA, rel, word: rel == null ? 'unknown' : rel <= -noise ? 'faster' : rel >= noise ? 'slower' : 'same', noise, noisy: noise > 0.006 };
     const found = before.findings || before.tendencies || [];
+    // Where the best lap gained or lost time, zone by zone. null for records made before pace profiles were kept.
+    const pd = STA.pace ? STA.pace.delta(before.prof, after.prof) : null;
     const withMove = (f, rule) => Object.assign({ id: f.id, title: f.title, kind: f.kind, phase: f.phase, band: f.band, axle: f.axle, stated: !!f.stated, key: targetKey(f), mechanism: rule ? rule.effect : '' }, movement(f, before, after, lap));
 
     for (const c of changes) {
@@ -215,15 +230,30 @@
       else if (stated) { c.why = 'driver'; c.targets = [withMove(stated, match(c, stated))]; }
       else { c.targets = found.map((f) => [f, match(c, f)]).filter((x) => x[1]).map((x) => withMove(x[0], x[1])); c.why = c.targets.length ? 'app' : 'unknown'; }
 
+      // A wing change that answers no handling problem was made for pace (unless the driver says otherwise):
+      // it is judged on lap time alone.
+      const aim = !stated && note.target !== 'none' && !c.targets.length && STA.pace ? STA.pace.purpose(c) : null;
+      if (aim) { c.why = 'pace'; c.purpose = aim; }
+      // Lap time where this change acts. Without pace profiles (older records) the whole lap stands in.
+      c.time = pd ? STA.pace.effect(c, changes, pd) : null;
+      c.top = pd && STA.pace.AERO[c.role] ? pd.top : null;
+      const tw = c.time ? c.time.word : lap.word, byTime = tw === 'faster' ? 'helped' : tw === 'slower' ? 'hurt' : 'none';
+
       const T = c.targets.filter((t) => t.word !== 'unknown');
       const better = T.some((t) => t.word === 'better' || t.word === 'overshot'), worse = T.some((t) => t.word === 'worse'), slight = T.some((t) => t.word === 'slight');
       c.overshot = T.some((t) => t.word === 'overshot');
       c.shared = changes.length - 1;
-      if (!c.targets.length) { c.verdict = lap.word === 'faster' ? 'helped' : lap.word === 'slower' ? 'hurt' : 'none'; c.cause = 'lapOnly'; }
+      if (c.why === 'pace') { c.verdict = byTime; c.cause = !c.time ? 'lapOnly' : tw === 'faster' ? 'paceGain' : tw === 'slower' ? 'paceLoss' : 'paceEven'; }
+      else if (!c.targets.length) { c.verdict = byTime; c.cause = 'lapOnly'; }
       else if (!T.length) { c.verdict = 'none'; c.cause = 'unmeasured'; }
-      else if (better && lap.word !== 'slower') { c.verdict = 'helped'; c.cause = c.overshot ? 'overshot' : 'asExpected'; }
-      else if (better) { c.verdict = 'none'; c.cause = 'notTheLimit'; }
+      else if (c.overshot) { c.verdict = tw === 'slower' ? 'hurt' : 'helped'; c.cause = 'overshot'; }
+      else if (better && tw === 'faster') { c.verdict = 'helped'; c.cause = 'asExpected'; }
+      // Problem smaller but no time gained: with pace data that is not a result. (Older records keep the benefit of the doubt.)
+      else if (better && tw === 'same') { c.verdict = c.time ? 'none' : 'helped'; c.cause = c.time ? 'notTheLimit' : 'asExpected'; }
+      else if (better) { c.verdict = c.time ? 'hurt' : 'none'; c.cause = c.time ? 'fixedButSlower' : 'notTheLimit'; }
+      else if (c.time && tw === 'faster') { c.verdict = 'helped'; c.cause = 'timeOnly'; }
       else if (worse) { c.verdict = 'hurt'; c.cause = 'wrongWay'; }
+      else if (c.time && tw === 'slower') { c.verdict = 'hurt'; c.cause = 'slower'; }
       else if (slight) { c.verdict = 'none'; c.cause = 'tooSmall'; }
       else {
         c.verdict = 'none';
@@ -237,6 +267,8 @@
       else if (note.verdict) c.confirmed = true;
       c.rethink = RETHINK[c.cause](c, lap);
       c.confidence = c.shared > 0 || lap.noisy ? 'low' : 'medium';
+      // For the tallies, a pace change's target is the lap time itself.
+      if (c.why === 'pace' && c.time) c.targets.push({ id: 'pace', key: 'pace', kind: 'pace', title: 'Lap time', stated: false, mechanism: c.purpose, text: c.time.text, gain: -c.time.net, word: tw === 'faster' ? 'better' : tw === 'slower' ? 'worse' : 'same' });
     }
 
     // Problems that got better although nothing was aimed at them: an unexpected gain, credited to what changed.
@@ -246,7 +278,7 @@
       const m = movement(f, before, after, lap);
       if (m.word === 'better') bonus.push(Object.assign({ id: f.id, title: f.title, kind: f.kind, phase: f.phase, band: f.band, axle: f.axle, key: targetKey(f), credit: changes.map((c) => c.key) }, m));
     }
-    return { changes, lap, bonus };
+    return { changes, lap, bonus, pace: pd };
   }
 
   /* Consecutive sessions with the same car at the same track that used different setups. */
@@ -289,7 +321,9 @@
       }
       return out;
     };
-    const stat = (c) => stats.get(c.key) || stats.set(c.key, { title: c.title, tried: 0, helped: 0, none: 0, hurt: 0, trials: [], by: {} }).get(c.key);
+    // dead: no effect at all (as opposed to "problem smaller but no time gained" or "step too small").
+    const DEAD = { noLever: 1, driver: 1, paceEven: 1, lapOnly: 1 };
+    const stat = (c) => stats.get(c.key) || stats.set(c.key, { title: c.title, tried: 0, helped: 0, none: 0, hurt: 0, dead: 0, time: 0, timed: 0, trials: [], by: {} }).get(c.key);
     for (const p of pairs(summaries, setups, { sim: q.sim, car: q.car })) {
       const j = judge(p.before, p.after, p.setupBefore, p.setupAfter, reasons && reasons[p.after.id], active()), when = p.after.recordedAt || 0;
       judged.set(p.after.id, Object.assign({ pair: p }, j));
@@ -299,11 +333,14 @@
         // because then the lap time at least has a single explanation.
         if (!c.targets.length && c.cause !== 'yourCall' && (c.shared > 0 || c.verdict === 'none')) continue;
         const st = stat(c);
-        st.tried++; st[c.verdict]++;
-        st.trials.push({ track: p.after.track, when, verdict: c.verdict, cause: c.cause, shared: c.shared });
+        const dead = c.verdict === 'none' && DEAD[c.cause] ? 1 : 0, net = c.time ? c.time.net : null;
+        st.tried++; st[c.verdict]++; st.dead += dead;
+        if (net != null) { st.time += net; st.timed++; }
+        st.trials.push({ track: p.after.track, when, verdict: c.verdict, cause: c.cause, shared: c.shared, net, text: c.time ? c.time.text : '', top: c.top, from: c.from, to: c.to });
         for (const t of c.targets) {
-          const b = st.by[t.key] || (st.by[t.key] = { tried: 0, helped: 0, none: 0, hurt: 0, gain: 0, balance: t.kind === 'understeer' || t.kind === 'oversteer', last: null, when: 0, clean: true });
-          b.tried++; b[c.verdict]++; b.gain += t.gain || 0; b.last = c.cause; b.when = when; if (c.shared > 0) b.clean = false;
+          const b = st.by[t.key] || (st.by[t.key] = { tried: 0, helped: 0, none: 0, hurt: 0, dead: 0, gain: 0, time: 0, timed: 0, balance: t.kind === 'understeer' || t.kind === 'oversteer', last: null, when: 0, clean: true });
+          b.tried++; b[c.verdict]++; b.dead += dead; b.gain += t.gain || 0; b.last = c.cause; b.when = when; if (c.shared > 0) b.clean = false;
+          if (net != null) { b.time += net; b.timed++; }
         }
         if (!c.targets.length && c.shared === 0 && c.verdict === 'helped' && j.lap.rel != null) lapGains.push({ key: c.key, title: c.title, rel: j.lap.rel, track: p.after.track, when });
       }
@@ -320,10 +357,23 @@
       text: 'New: ' + lower(e.title) + ' also cut ' + targetText(k) + ' (' + runs(e.n) + '). Now offered for it.' });
     for (const st of stats.values()) for (const k of Object.keys(st.by)) {
       const b = st.by[k], title = st.title, per = b.balance && b.tried ? ' About ' + Math.abs(Math.round(b.gain / b.tried * 100)) + ' points a run.' : '';
-      if (b.helped && b.helped >= b.none + b.hurt) relay.push({ kind: 'works', when: b.when, confidence: sure(b.tried, b.clean), text: title + ' works for ' + targetText(k) + ' (' + b.helped + ' of ' + runs(b.tried) + ').' + (b.gain > 0 ? per : '') + ' Ranked higher.' });
+      const worth = b.timed && Math.abs(b.time / b.timed) >= 0.03 ? ' ' + sec(b.time / b.timed) + ' a lap ' + (b.time < 0 ? 'faster' : 'slower') + ' where it acts.' : '';
+      if (k === 'pace') {
+        // A wing trade depends on the track and on the level it was made from, so each step is reported
+        // on its own (the latest result for the same step at the same track), most recent first.
+        const steps = new Map();
+        for (const x of st.trials.filter((x) => x.net != null).sort((x, y) => x.when - y.when)) { const k = x.track + '|' + x.from + '|' + x.to, was = steps.get(k); steps.set(k, Object.assign({}, x, { n: (was ? was.n : 0) + 1, clean: (!was || was.clean) && !x.shared })); }
+        for (const x of Array.from(steps.values()).sort((x, y) => y.when - x.when).slice(0, 4)) {
+          relay.push({ kind: x.verdict === 'helped' ? 'works' : x.verdict === 'hurt' ? 'fails' : 'mixed', when: x.when, confidence: x.n === 1 && x.clean && Math.abs(x.net) >= 0.15 ? 'medium' : sure(x.n, x.clean), top: x.top,
+            text: title + (x.from && x.to ? ' ' + x.from + ' → ' + x.to : '') + ' at ' + x.track + ': ' + (x.verdict === 'none' ? 'no net lap time' : sec(x.net) + ' a lap ' + (x.net < 0 ? 'faster' : 'slower')) + ' (' + x.text + ').' + (x.verdict === 'hurt' ? ' Put it back.' : '') });
+        }
+        continue;
+      }
+      if (b.helped && b.helped >= b.none + b.hurt) relay.push({ kind: 'works', when: b.when, confidence: sure(b.tried, b.clean), text: title + ' works for ' + targetText(k) + ' (' + b.helped + ' of ' + runs(b.tried) + ').' + (b.gain > 0 ? per : '') + worth + ' Ranked higher.' });
       else if (b.hurt && !b.helped) relay.push({ kind: 'fails', when: b.when, confidence: sure(b.tried, b.clean), text: title + ' made ' + targetText(k) + ' worse (' + runs(b.tried) + ').' + (b.hurt + b.none >= 2 ? ' Listed last.' : '') });
       else if (!b.helped && b.last === 'tooSmall') relay.push({ kind: 'size', when: b.when, confidence: sure(b.tried, b.clean), text: title + ' moves ' + targetText(k) + ' the right way, but one step was too small. A bigger step is offered.' });
-      else if (!b.helped) relay.push({ kind: 'fails', when: b.when, confidence: sure(b.tried, b.clean), text: title + ' does not move ' + targetText(k) + ' (' + runs(b.tried) + ').' + (b.none + b.hurt >= 2 ? ' Listed last.' : ' One more like this and it is listed last.') });
+      else if (!b.helped && b.last === 'notTheLimit') relay.push({ kind: 'mixed', when: b.when, confidence: sure(b.tried, b.clean), text: title + ' reduces ' + targetText(k) + ', but the lap was no faster (' + runs(b.tried) + '). That problem is not what is costing time.' });
+      else if (!b.helped) relay.push({ kind: 'fails', when: b.when, confidence: sure(b.tried, b.clean), text: title + ' does not move ' + targetText(k) + ' (' + runs(b.tried) + ').' + (b.dead + b.hurt >= 2 ? ' Listed last.' : ' One more like this and it is listed last.') });
       else relay.push({ kind: 'mixed', when: b.when, confidence: 'low', text: title + ' is mixed for ' + targetText(k) + ' (' + b.helped + ' of ' + runs(b.tried) + ' helped).' });
     }
     for (const g of lapGains) relay.push({ kind: 'lap', when: g.when, confidence: 'low', text: g.title + ' on its own: lap ' + Math.abs(g.rel * 100).toFixed(2) + '% faster at ' + g.track + '.' });
@@ -351,7 +401,7 @@
     if (!a || !b) return null;
     // Judged with what the app knew about this car at that point, the same way the tallies are built.
     const j = knowledge(summaries, setups, q, reasons).judged.get(after.id) || judge(before, after, a, b, reasons && reasons[after.id]);
-    return { before, after, setupBefore: a, setupAfter: b, changes: j.changes, lap: j.lap, bonus: j.bonus, sessions: mine.length, choices: intentChoices(before) };
+    return { before, after, setupBefore: a, setupAfter: b, changes: j.changes, lap: j.lap, bonus: j.bonus, pace: j.pace, sessions: mine.length, choices: intentChoices(before) };
   }
 
   STA.learning = { snapshot, changesBetween, addresses, judge, pairs, outcomes, knowledge, review, intentChoices, targetKey, targetText };

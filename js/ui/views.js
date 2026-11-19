@@ -467,7 +467,7 @@
         h('label', { class: 'check big' }, [h('input', { type: 'checkbox', checked: !!checked[x.key], 'aria-label': 'Include: ' + x.title, onchange: (ev) => { checked[x.key] = ev.target.checked; } }), h('span', { class: 'rank num', text: String(x.rank) })]),
         h('div', { class: 'suggestion-body' }, [
           h('h3', {}, [x.title, x.amount ? h('span', { class: 'amount', text: ' · ' + x.amount }) : null]),
-          h('p', { class: 'why' }, ['Now ', h('b', { text: x.current }), x.fix ? ' · ' + x.effect : ' · Fixes: ' + x.reasons.map(lower).join('; ') + (x.cost ? ' · Cost: ' + lower(x.cost) : '')]),
+          h('p', { class: 'why' }, ['Now ', h('b', { text: x.current }), x.fix ? ' · ' + x.effect : (x.targetKey === 'pace' ? ' · For: ' : ' · Fixes: ') + x.reasons.map(lower).join('; ') + (x.cost ? ' · Cost: ' + lower(x.cost) : '')]),
           tags.length ? h('p', { class: 'tags' }, tags.map(([cls, text]) => h('span', { class: 'tag ' + cls, text }))) : null,
           x.fix ? null : more('why-' + x.blockKey, 'How it works', [h('p', { text: x.effect })]),
         ]),
@@ -569,12 +569,18 @@
     const verdict = { helped: 'Helped', none: 'No clear difference', hurt: 'Worse' };
     const again = () => { A().state.analysis.delete(s.id); ui().adviceChecked = null; render(); };
     const rows = rv.changes.map((c) => {
-      const inferred = c.why === 'app' ? 'App\'s reading: ' + c.targets.map((t) => lower(t.title)).join('; ') : 'Not known: what was it for?';
+      const inferred = c.why === 'pace' ? 'App\'s reading: ' + lower(c.purpose) : c.why === 'app' ? 'App\'s reading: ' + c.targets.map((t) => lower(t.title)).join('; ') : 'Not known: what was it for?';
+      // Lap time where the change acts comes first; then top speed for wing changes; then the handling problem.
+      const got = [];
+      if (c.time) got.push(h('b', { text: STA.pace.secs(c.time.net) }), ' where it acts' + (c.time.parts.some((p) => Math.abs(p.d) >= 0.01) ? ': ' + c.time.text : ''));
+      if (c.top && Math.abs(A().speed(c.top.d)) >= 0.5) got.push((got.length ? '. ' : '') + 'Top speed ' + (c.top.d > 0 ? '+' : '−') + Math.abs(A().speed(c.top.d)).toFixed(0) + ' ' + A().speedUnit());
+      const probs = c.targets.filter((t) => t.kind !== 'pace');
+      if (probs.length) got.push((got.length ? '. ' : '') + probs.map((t) => lower(t.title) + ' ' + t.text).join('; '));
       return {
         change: h('span', {}, [c.title, h('span', { class: 'evidence', text: ' ' + c.from + ' → ' + c.to })]),
         why: h('select', { class: 'mini', 'aria-label': 'What was this change for? ' + c.title, onchange: (ev) => { R.set(rv.after.id, c.key, { target: ev.target.value || null }); again(); } },
           [h('option', { value: '', selected: !c.note.target, text: inferred })].concat(rv.choices.map((o) => h('option', { value: o.value, selected: c.note.target === o.value, text: o.label })))),
-        got: c.targets.length ? c.targets.map((t) => t.text).join('; ') : '–',
+        got: got.length ? h('span', {}, got) : '–',
         verdict: h('span', {}, [h('span', { class: 'verdict ' + c.verdict, text: c.overshot && c.verdict === 'helped' ? 'Helped, too far' : verdict[c.verdict] }),
           h('select', { class: 'mini', 'aria-label': 'Your own verdict on: ' + c.title, title: 'Overrule the telemetry if you felt otherwise', onchange: (ev) => { R.set(rv.after.id, c.key, { verdict: ev.target.value || null }); again(); } },
             [['', 'Telemetry\'s call'], ['helped', 'I say: helped'], ['none', 'I say: no difference'], ['hurt', 'I say: worse']].map(([v, t]) => h('option', { value: v, selected: (c.note.verdict || '') === v, text: t })))]),
@@ -588,8 +594,12 @@
     return h('section', { class: 'panel' }, [
       head,
       h('p', { class: 'hint', text: 'Against the run before (' + A().whenText(rv.before.recordedAt) + ', "' + rv.setupBefore.name + '"). ' + laps(rv.before, rv.after) + lapWord + '.' }),
+      rv.pace ? h('p', { class: 'moved' }, [h('b', { text: 'Where the best lap moved: ' }),
+        U.fmtLap(rv.pace.lapBefore) + ' → ' + U.fmtLap(rv.pace.lapAfter) + ' (' + STA.pace.secs(rv.pace.lap) + '). ' +
+        (STA.pace.ZONES.filter((z) => Math.abs(rv.pace.zones[z]) >= 0.01).sort((a, b) => Math.abs(rv.pace.zones[b]) - Math.abs(rv.pace.zones[a])).map((z) => STA.pace.ZONE_TEXT[z] + ' ' + STA.pace.secs(rv.pace.zones[z])).join(', ') || 'No zone moved by a hundredth') +
+        '. Top speed ' + A().speed(rv.pace.top.before).toFixed(0) + ' → ' + A().speed(rv.pace.top.after).toFixed(0) + ' ' + A().speedUnit() + '.']) : null,
       unknown ? h('p', { class: 'instead', text: unknown + (unknown === 1 ? ' change has' : ' changes have') + ' no reason on record. Say what ' + (unknown === 1 ? 'it was' : 'each was') + ' for under "Why" and the app will judge it against that.' }) : null,
-      rows.length ? table([{ key: 'change', label: 'Changed' }, { key: 'why', label: 'Why' }, { key: 'got', label: 'Got' }, { key: 'verdict', label: 'Result' }, { key: 'think', label: 'What the app makes of it' }], rows, { cls: 'review' })
+      rows.length ? table([{ key: 'change', label: 'Changed' }, { key: 'why', label: 'Why' }, { key: 'got', label: 'Lap time and effect' }, { key: 'verdict', label: 'Result' }, { key: 'think', label: 'What the app makes of it' }], rows, { cls: 'review' })
         : h('p', { class: 'empty', text: 'Only settings the app does not judge changed (fuel, gearing, cooling).' }),
       rv.bonus.length ? h('ul', { class: 'plain gains' }, rv.bonus.map((b) => h('li', {}, [h('b', { text: 'Unexpected gain: ' }), lower(b.title) + ' ' + b.text + ', with nothing aimed at it. Credited to ' + b.credit.map(titleOf).join('; ') + '. ' +
         (b.credit.length === 1 ? 'Now offered for this problem on this car.' : 'Shared between ' + b.credit.length + ' changes, so it needs a second run to count.')]))) : null,
@@ -608,7 +618,7 @@
     if (!know || !know.relay.length) return null;
     return h('section', { class: 'panel' }, [
       h('h2', { text: 'What your runs have taught the app about this car' }),
-      h('ul', { class: 'plain learned' }, know.relay.slice(0, 8).map((r) => h('li', { class: r.kind }, [r.text + ' ', confTag(r.confidence)]))),
+      h('ul', { class: 'plain learned' }, know.relay.slice(0, 8).map((r) => h('li', { class: r.kind }, [r.text + (r.top && Math.abs(A().speed(r.top.d)) >= 0.5 ? ' Top speed ' + (r.top.d > 0 ? '+' : '−') + Math.abs(A().speed(r.top.d)).toFixed(0) + ' ' + A().speedUnit() + '.' : '') + ' ', confTag(r.confidence)]))),
       know.relay.length > 8 ? more('learned-all', 'All ' + know.relay.length, [h('ul', { class: 'plain learned' }, know.relay.slice(8).map((r) => h('li', { class: r.kind }, [r.text + ' ', confTag(r.confidence)])))]) : null,
     ]);
   }
