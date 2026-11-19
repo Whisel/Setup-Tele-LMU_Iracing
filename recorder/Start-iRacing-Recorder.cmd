@@ -1,17 +1,8 @@
 @echo off
 rem Starts the iRacing recorder that works with the Setup and Telemetry app.
-rem Needs Python 3.8 or later (python.org, or "winget install Python.Python.3.12").
+rem It runs in the Windows PowerShell that comes with Windows: nothing to install.
+rem "-ExecutionPolicy Bypass" lets this one script run, for this window only.
 title iRacing recorder
-where py >nul 2>nul
-if %errorlevel%==0 (
-  py -3 "%~dp0iracing_recorder.py" %*
-) else (
-  where python >nul 2>nul
-  if errorlevel 1 (
-    echo Python was not found. Install Python 3 from python.org, then run this again.
-  ) else (
-    python "%~dp0iracing_recorder.py" %*
-  )
-)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0iracing-recorder.ps1" %*
 echo.
 pause

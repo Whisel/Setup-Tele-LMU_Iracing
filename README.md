@@ -64,12 +64,16 @@ loop is: drive, get out of the car, and the run is already open in the app.
 
 Set it up once:
 
-1. Install Python 3.8 or later if the PC does not have it (python.org, or
-   `winget install Python.Python.3.12`). Nothing else is needed.
-2. Double-click `recorder\Start-iRacing-Recorder.cmd` and leave its window open while you
-   drive. To have it start with Windows, put a shortcut to it in the Startup folder
-   (Win+R, `shell:startup`).
-3. In the app, press **Turn on** on the recorder line.
+1. Double-click `recorder\Start-iRacing-Recorder.cmd` and leave its window open while you
+   drive. It runs in the Windows PowerShell that comes with Windows 10 and 11, so there is
+   nothing to install. To have it start with Windows, put a shortcut to it in the Startup
+   folder (Win+R, `shell:startup`).
+2. In the app, press **Turn on** on the recorder line.
+
+To check it on your PC before trusting it with a session, run
+`recorder\Start-iRacing-Recorder.cmd -SelfTest`. It runs 52 checks of its own logic and
+web server in a couple of seconds, prints the PowerShell version it ran in, and touches
+nothing in iRacing.
 
 How it works, and what it does not do:
 
@@ -80,14 +84,18 @@ How it works, and what it does not do:
 - It talks to the app through a web server on this computer only (`127.0.0.1:8765`).
   Pages opened from disk or served from localhost may use it; other websites are refused.
   If you host the app somewhere, start the recorder with
-  `--allow-origin https://your.site`. `--port` changes the port, `--manual` starts it
+  `-AllowOrigin https://your.site`. `-Port` changes the port, `-Manual` starts it
   without automatic recording.
 - In automatic mode, pressing Alt+L to switch telemetry off will be undone within a few
   seconds. Use **Stop recording** in the app, or untick **Record every run**.
 - Recordings add up: an hour of driving is several hundred megabytes at iRacing's
   default 60 Hz. The recorder does not delete anything.
-- `python recorder/iracing_recorder.py --simulate` runs it against a pretend sim on any
-  system, which is how the link to the app is tested.
+- `Start-iRacing-Recorder.cmd -Simulate` runs it against a pretend sim, which is how the
+  link to the app is tested.
+- The launcher starts the script with `-ExecutionPolicy Bypass`, which applies to that one
+  window only. On a PC where an administrator has locked the PowerShell execution policy,
+  the script will be refused and that policy would have to allow it. Windows may also ask
+  before running a `.cmd` file that was downloaded from the internet.
 - iRacing only. Le Mans Ultimate has its own automatic recording setting in the game.
 
 ## Sessions in recorded order
@@ -380,9 +388,9 @@ the app without your own data:
 
     node tests/helpers/make-ibt.js sample.ibt
 
-The recorder has its own tests: `python -m unittest recorder/test_recorder.py` (19 tests;
-they cover everything except the two Windows calls that open iRacing's memory and send
-the command).
+The recorder tests itself: `recorder\Start-iRacing-Recorder.cmd -SelfTest` (52 checks; they
+cover everything except the two Windows calls that open iRacing's memory and send the
+command).
 
 ## Layout
 
@@ -398,7 +406,7 @@ the command).
     js/analysis/          handling analysis, advice rules, driving technique,
                           learning from earlier sessions, baseline
     js/io/recorder.js     talks to the iRacing recorder on this PC
-    recorder/             the iRacing recorder (Python, Windows) and its tests
+    recorder/             the iRacing recorder (PowerShell, Windows), with a built-in self-test
     js/store/folders.js   watched folders, the file index, where you left off
     js/store/library.js   browser-side setup and session library
     js/ui/                charts, DuckDB loader, app shell and tabs
