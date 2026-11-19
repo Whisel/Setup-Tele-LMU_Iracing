@@ -350,6 +350,89 @@
     ]));
   }
 
+  /* ---------- Library: watched folders, sorted by sim, car and track ---------- */
+
+  function renderLibrary() {
+    const st = A().state, L = st.lib, F = STA.folders;
+    const tree = F.tree(L.entries, st.summaries), combos = [];
+    for (const sim of tree) for (const car of sim.cars) for (const t of car.tracks) combos.push(t);
+    const runsText = (t) => t.runs.length + (t.runs.length === 1 ? ' run' : ' runs') + (t.unopened ? ', ' + t.unopened + ' new' : '');
+    const openKeys = new Set(st.sessions.map((s) => s.meta.fileKey).filter(Boolean));
+
+    if (!L.folders.length) {
+      view().appendChild(h('div', { class: 'blank' }, [
+        h('h2', { text: 'Add your telemetry folders' }),
+        h('p', { text: 'Point the app at the folders the sims record into. It sorts every run by sim, car and track, finds new runs by itself, and reopens a car and track the way you left it.' }),
+        h('p', { class: 'hint', text: 'iRacing: Documents\\iRacing\\telemetry. Le Mans Ultimate: the game\'s UserData\\Telemetry folder. Nothing is copied or uploaded.' }),
+        h('div', { class: 'actions centre' }, [h('button', { class: 'btn', type: 'button', text: 'Add a telemetry folder', onclick: () => A().addFolder() })]),
+        F.supported() ? null : h('p', { class: 'hint', text: 'This browser can read a folder for one visit only. Chrome and Edge can remember it.' }),
+      ]));
+      return;
+    }
+
+    /* where you left off */
+    const last = combos.find((t) => t.key === F.resume.last());
+    if (last) {
+      const saved = F.resume.get(last.key) || {};
+      view().appendChild(h('section', { class: 'panel resume' }, [
+        h('div', {}, [
+          h('h2', { text: 'Pick up where you left off' }),
+          h('p', { class: 'resume-what' }, [A().simName(last.sim) + ' · ', h('b', { text: last.car }), ' · ', h('b', { text: last.track })]),
+          h('p', { class: 'hint', text: runsText(last) + (last.best ? ' · best ' + U.fmtLap(last.best) : '') + (saved.at ? ' · last open ' + A().whenText(saved.at) : '') }),
+        ]),
+        h('button', { class: 'btn', type: 'button', text: 'Continue', onclick: () => A().openCombo(last.key) }),
+      ]));
+    }
+
+    /* sim > car > track */
+    if (!combos.length) view().appendChild(h('section', { class: 'panel' }, [h('p', { class: 'empty', text: L.busy ? 'Indexing the folder…' : 'No recordings found in the folders below yet.' })]));
+    for (const sim of tree) {
+      view().appendChild(h('section', { class: 'panel' }, [
+        h('h2', { text: A().simName(sim.sim) }),
+      ].concat(sim.cars.map((car) => h('div', { class: 'libcar' }, [
+        h('h3', {}, [car.car, car.carClass ? h('span', { class: 'tag', text: car.carClass }) : null]),
+      ].concat(car.tracks.map((t) => {
+        const open = ui().libOpen === t.key;
+        return h('div', { class: 'combo' + (open ? ' open' : '') }, [
+          h('div', { class: 'combo-row' }, [
+            h('span', { class: 'combo-track', text: t.track }),
+            h('span', { class: 'combo-meta', text: runsText(t) }),
+            h('span', { class: 'combo-meta', text: 'last ' + A().whenText(t.last) }),
+            h('span', { class: 'combo-best num', text: t.best ? U.fmtLap(t.best) : '–' }),
+            h('span', { class: 'combo-acts' }, [
+              h('button', { class: 'link', type: 'button', text: open ? 'Hide runs' : 'Runs', 'aria-expanded': open ? 'true' : 'false', onclick: () => { ui().libOpen = open ? null : t.key; render(); } }),
+              h('button', { class: 'btn small', type: 'button', text: 'Open', 'aria-label': 'Open ' + car.car + ' at ' + t.track, onclick: () => A().openCombo(t.key) }),
+            ]),
+          ]),
+          open ? h('div', { class: 'combo-runs' }, t.runs.map((e) => h('div', { class: 'run-row' }, [
+            h('span', { class: 'num', text: A().whenText(e.recordedAt) }),
+            h('span', { class: 'run-file', text: (e.setupName ? e.setupName + ' · ' : '') + e.name, title: e.path }),
+            h('span', { class: 'combo-meta', text: openKeys.has(e.id) ? 'open now' : e.sessionId ? '' : 'new' }),
+            h('span', { class: 'combo-best num', text: e.bestLap ? U.fmtLap(e.bestLap) : '–' }),
+            h('button', { class: 'link', type: 'button', text: 'Open this run', onclick: () => A().openCombo(t.key, e.id) }),
+          ]))) : null,
+        ]);
+      })))))));
+    }
+
+    /* folders */
+    const state = { ready: '', locked: 'needs your OK to be read again', offline: 'picked for one visit: pick it again to open its files' };
+    const count = (id) => L.entries.filter((e) => e.folderId === id && e.kind === 'run' && !e.error).length;
+    const bad = L.entries.filter((e) => e.error);
+    view().appendChild(h('section', { class: 'panel' }, [
+      h('h2', { text: 'Folders' }),
+      h('ul', { class: 'plain folders' }, L.folders.map((f) => h('li', {}, [
+        h('b', { text: f.name }), ' · ' + count(f.id) + ' recordings' + (f.lastScan ? ' · checked ' + A().whenText(f.lastScan) : '') + (state[f.state] ? ' · ' + state[f.state] : '') + ' ',
+        f.state === 'offline' ? h('button', { class: 'link', type: 'button', text: 'Pick it again', onclick: () => A().addFolder() })
+          : h('button', { class: 'link', type: 'button', text: f.state === 'locked' ? 'Allow and rescan' : 'Rescan', onclick: () => A().scanLib(true, f.id) }),
+        ' ', h('button', { class: 'link', type: 'button', text: 'Remove', 'aria-label': 'Remove folder ' + f.name, title: 'Stops watching this folder. Your files, setups and session history are not touched.', onclick: () => A().removeFolder(f.id) }),
+      ]))),
+      h('div', { class: 'actions' }, [h('button', { class: 'btn ghost', type: 'button', text: 'Add another folder', onclick: () => A().addFolder() })]),
+      h('p', { class: 'hint', text: 'New recordings are picked up when you open the app or come back to its window. ' + (F.supported() ? 'After a browser restart, it may ask once to read a folder again.' : 'This browser can read a folder for one visit only; Chrome and Edge can remember it.') }),
+      bad.length ? more('lib-bad', bad.length + (bad.length === 1 ? ' file could not be read' : ' files could not be read'), [h('ul', { class: 'plain' }, bad.slice(0, 30).map((e) => h('li', {}, [h('b', { text: e.name + ': ' }), e.error])))]) : null,
+    ]));
+  }
+
   /* ---------- Setup advice ---------- */
 
   /* A collapsed block that remembers whether it is open across re-renders. */
@@ -795,7 +878,7 @@
   function render() {
     clear();
     const tab = STA.app.state.tab;
-    ({ compare: renderCompare, map: renderMap, tables: renderTables, advice: renderAdvice, technique: renderTechnique, baseline: renderBaseline, setups: renderSetups }[tab] || renderCompare)();
+    ({ compare: renderCompare, map: renderMap, tables: renderTables, library: renderLibrary, advice: renderAdvice, technique: renderTechnique, baseline: renderBaseline, setups: renderSetups }[tab] || renderCompare)();
   }
 
   /* Pick one overlaid lap out in whatever charts are on screen (null clears it). */

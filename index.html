@@ -16,8 +16,8 @@
   </div>
   <nav class="tabs" id="tabs" role="tablist" aria-label="Views"></nav>
   <div class="top-tools">
-    <label class="mini">Speed in
-      <select id="unit-speed"><option value="kmh">km/h</option><option value="mph">mph</option></select>
+    <label class="mini"><span class="mini-text">Speed in</span>
+      <select id="unit-speed" aria-label="Speed unit"><option value="kmh">km/h</option><option value="mph">mph</option></select>
     </label>
     <button class="btn ghost" id="theme-toggle" type="button">Light theme</button>
   </div>
@@ -27,10 +27,10 @@
   <aside class="rail" aria-label="Sessions and laps">
     <section class="drop" id="drop">
       <p class="drop-title">Add telemetry or setup files</p>
-      <p class="drop-help">Drop files here. iRacing <code>.ibt</code>, Le Mans Ultimate <code>.duckdb</code> and <code>.svm</code>, or a library export.</p>
+      <p class="drop-help">Add your telemetry folder once and open runs from the Library, or drop single files here: <code>.ibt</code>, <code>.duckdb</code>, <code>.svm</code>.</p>
       <div class="drop-actions">
-        <button class="btn" id="pick-files" type="button">Choose files</button>
-        <button class="btn ghost" id="pick-folder" type="button" title="Reads setups from every .svm and .ibt file in a folder, without loading the telemetry">Scan a folder for setups</button>
+        <button class="btn" id="pick-folder" type="button" title="The app remembers the folder, sorts its recordings by sim, car and track, and finds new ones by itself">Add a telemetry folder</button>
+        <button class="btn ghost" id="pick-files" type="button">Choose files</button>
       </div>
       <input type="file" id="file-input" multiple hidden accept=".ibt,.duckdb,.svm,.json">
       <input type="file" id="folder-input" webkitdirectory multiple hidden>
@@ -66,6 +66,7 @@
 <script src="js/analysis/learning.js"></script>
 <script src="js/analysis/baseline.js"></script>
 <script src="js/store/library.js"></script>
+<script src="js/store/folders.js"></script>
 <script src="js/ui/duck.js"></script>
 <script src="js/ui/charts.js"></script>
 <script src="js/ui/app.js"></script>

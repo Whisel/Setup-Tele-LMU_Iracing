@@ -13,15 +13,18 @@
   const STA = (root.STA = root.STA || {});
   const U = STA.util;
 
-  const DB_NAME = 'setup-telemetry-library', STORES = ['setups', 'sessions'];
+  // folders and files belong to the folder library (folders.js): watched folders and the index of what is in them.
+  const DB_NAME = 'setup-telemetry-library', DB_VERSION = 2, STORES = ['setups', 'sessions', 'folders', 'files'];
 
   function memoryBackend() {
-    const data = { setups: new Map(), sessions: new Map() };
+    const data = { setups: new Map(), sessions: new Map(), folders: new Map(), files: new Map() };
+    // Folder records hold a live folder handle, which must not be copied through JSON.
+    const copy = (store, v) => (store === 'folders' ? Object.assign({}, v) : JSON.parse(JSON.stringify(v)));
     return {
       persistent: false,
-      all: async (store) => Array.from(data[store].values()).map((v) => JSON.parse(JSON.stringify(v))),
-      get: async (store, id) => { const v = data[store].get(id); return v ? JSON.parse(JSON.stringify(v)) : null; },
-      put: async (store, rec) => { data[store].set(rec.id, JSON.parse(JSON.stringify(rec))); },
+      all: async (store) => Array.from(data[store].values()).map((v) => copy(store, v)),
+      get: async (store, id) => { const v = data[store].get(id); return v ? copy(store, v) : null; },
+      put: async (store, rec) => { data[store].set(rec.id, copy(store, rec)); },
       del: async (store, id) => { data[store].delete(id); },
       clear: async (store) => { data[store].clear(); },
     };
@@ -30,7 +33,7 @@
   function idbBackend() {
     return new Promise((resolve, reject) => {
       let req;
-      try { req = root.indexedDB.open(DB_NAME, 1); } catch (e) { reject(e); return; }
+      try { req = root.indexedDB.open(DB_NAME, DB_VERSION); } catch (e) { reject(e); return; }
       req.onupgradeneeded = () => { for (const s of STORES) if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s, { keyPath: 'id' }); };
       req.onerror = () => reject(req.error || new Error('IndexedDB could not be opened'));
       req.onblocked = () => reject(new Error('IndexedDB is blocked'));
@@ -197,6 +200,6 @@
   const sameCar = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
   const sameTrack = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
 
-  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked, limits, contested, reasons,
+  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked, limits, contested, reasons, raw: open,
     get persistent() { return backend ? backend.persistent : null; } };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -7,7 +7,7 @@
   const $ = (id) => document.getElementById(id);
 
   const TABS = [
-    ['compare', 'Lap comparison'], ['map', 'Track map'], ['tables', 'Telemetry tables'],
+    ['library', 'Library'], ['compare', 'Lap comparison'], ['map', 'Track map'], ['tables', 'Telemetry tables'],
     ['advice', 'Setup advice'], ['technique', 'Driving technique'], ['baseline', 'Baseline setup'], ['setups', 'Setups and differences'],
   ];
 
@@ -15,7 +15,8 @@
        overlay  = [{ sid, lap, slot }]   slot gives the lap its letter and colour and never changes while it is selected
        refSlot  = slot of the reference lap, the one every time difference is measured against */
   const state = {
-    sessions: [], activeId: null, overlay: [], refSlot: null, tab: 'compare',
+    sessions: [], activeId: null, overlay: [], refSlot: null, tab: 'library',
+    lib: { folders: [], entries: [], report: null, busy: false },
     speedUnit: 'kmh', setups: [], summaries: [], analysis: new Map(), tech: new Map(), messages: [], ui: {},
   };
   const SLOT_COLOURS = 8; // distinct colours available; laps beyond that are drawn in a neutral grey
@@ -152,13 +153,128 @@
     }
     busy(null);
     await refreshLibrary();
+    // Someone who just added a file wants to see it, not the list of folders.
+    if (added && state.tab === 'library' && !restoring) state.tab = 'compare';
     renderAll();
+  }
+
+  /* ---------- folder library ---------- */
+
+  const fileKeys = new WeakMap(); // File -> index entry id, for files opened from the library
+  let restoring = false;
+  const comboOf = (s) => STA.folders.comboKey({ sim: s.meta.sim, car: s.meta.car, track: s.trackName });
+  /* The index entry a file belongs to: opened from the library, or the same file dropped by hand. */
+  function keyForFile(file) {
+    if (!file) return null;
+    if (fileKeys.has(file)) return fileKeys.get(file);
+    const e = state.lib.entries.find((x) => x.kind === 'run' && x.name === file.name && x.size === file.size && x.lastModified === file.lastModified);
+    return e ? e.id : null;
+  }
+
+  async function refreshLib() {
+    state.lib.folders = await STA.folders.list();
+    state.lib.entries = await STA.folders.entries();
+  }
+
+  /* Bring the index up to date. ask: allowed to show the browser's permission prompt (clicks only). */
+  async function scanLib(ask, only) {
+    if (state.lib.busy) return;
+    state.lib.busy = true;
+    try {
+      const rep = await STA.folders.scan({ ask, only, onProgress: (label, f) => busy('Indexing ' + label, f) });
+      state.lib.report = rep;
+      if (rep.added) await refreshLibrary();
+      if (ask && rep.added) say('ok', 'Indexed ' + rep.added + (rep.added === 1 ? ' new file.' : ' new files.'));
+    } catch (e) { console.error(e); say('error', 'Folder scan: ' + (e && e.message ? e.message : e)); }
+    busy(null);
+    state.lib.busy = false;
+    await refreshLib();
+    if (state.tab === 'library') STA.views.render();
+  }
+
+  async function addFolder() {
+    if (!STA.folders.supported()) { $('folder-input').click(); return; }
+    try {
+      const f = await STA.folders.add();
+      state.tab = 'library';
+      await scanLib(true, f.id);
+      renderAll();
+    } catch (e) { if (!e || e.name !== 'AbortError') say('error', 'That folder could not be added: ' + (e && e.message ? e.message : e)); }
+  }
+
+  /* Folder picked through the plain file dialog (browsers that cannot remember a folder). */
+  async function addPickedFolder(fileList) {
+    const f = await STA.folders.addPicked(fileList);
+    if (!f) { say('warn', 'No .ibt, .duckdb or .svm files in that folder.'); return; }
+    state.tab = 'library';
+    await scanLib(true, f.id);
+    renderAll();
+  }
+
+  async function removeFolder(id) { await STA.folders.remove(id); await refreshLib(); renderAll(); }
+
+  function closeSession(id) {
+    state.sessions = state.sessions.filter((x) => x.id !== id);
+    for (const e of state.overlay.filter((e) => e.sid === id)) removeLap(e.sid, e.lap);
+    state.analysis.delete(id); state.tech.delete(id);
+  }
+
+  /* Open a car and track combination from the library and put the view back the way it was left.
+     onlyEntry: open just that one recording instead. */
+  async function openCombo(key, onlyEntry) {
+    const runs = state.lib.entries.filter((e) => e.kind === 'run' && !e.error && STA.folders.comboKey(e) === key).sort((a, b) => (a.recordedAt || 0) - (b.recordedAt || 0));
+    if (!runs.length) return;
+    const saved = onlyEntry ? null : STA.folders.resume.get(key), newest = runs[runs.length - 1];
+    let want = onlyEntry ? [onlyEntry] : ((saved && saved.open) || []).filter((id) => runs.some((r) => r.id === id));
+    // A run recorded since last time is what the driver came back for.
+    if (!onlyEntry && want.indexOf(newest.id) < 0 && (!want.length || !newest.sessionId)) want.push(newest.id);
+    restoring = true;
+    try {
+      for (const s of state.sessions.filter((s) => comboOf(s) !== key)) closeSession(s.id);
+      const files = [];
+      for (const id of want) {
+        if (state.sessions.some((s) => s.meta.fileKey === id)) continue;
+        try { const f = await STA.folders.fileFor(runs.find((r) => r.id === id)); fileKeys.set(f, id); files.push(f); }
+        catch (e) { say('error', e && e.message ? e.message : String(e)); }
+      }
+      if (files.length) await addFiles(files);
+      const byKey = (k) => state.sessions.find((s) => s.meta.fileKey === k);
+      const fresh = byKey(newest.id) && !(saved && (saved.open || []).indexOf(newest.id) >= 0);
+      if (saved && !fresh && byKey(saved.active)) {
+        clearLaps();
+        for (const o of saved.overlay || []) { const s = byKey(o.f), lap = s && s.laps.find((l) => l.num === o.n); if (lap) { addLap(s.id, lap.idx); if (o.ref) setRef(s.id, lap.idx); } }
+        activate(byKey(saved.active).id, false);
+        state.tab = saved.tab || 'advice';
+      } else {
+        const s = byKey(onlyEntry || newest.id) || state.sessions[state.sessions.length - 1];
+        if (s) activate(s.id, true);
+        state.tab = (saved && saved.tab) || 'advice';
+      }
+    } finally { restoring = false; }
+    await refreshLib();
+    renderAll();
+  }
+
+  /* Remember what is open and overlaid for the active car and track, so it can be restored later. */
+  function saveResume() {
+    if (restoring) return;
+    const a = active();
+    if (!a || !a.meta.fileKey) return;
+    const key = comboOf(a), mine = state.sessions.filter((s) => s.meta.fileKey && comboOf(s) === key), old = STA.folders.resume.get(key);
+    const overlay = [];
+    for (const e of state.overlay) {
+      const s = sessionById(e.sid), lap = s && s.meta.fileKey && s.laps.find((l) => l.idx === e.lap);
+      if (lap) overlay.push({ f: s.meta.fileKey, n: lap.num, ref: e.slot === state.refSlot });
+    }
+    STA.folders.resume.set(key, { open: mine.map((s) => s.meta.fileKey), active: a.meta.fileKey, overlay, tab: state.tab === 'library' ? (old && old.tab) || 'advice' : state.tab, at: Date.now() });
   }
 
   async function loadIbt(file) {
     busy('Reading ' + file.name, 0);
     const raw = await STA.ibt.read(file, { want: STA.session.IBT_WANT, onProgress: (f) => busy('Reading ' + file.name, f) });
-    await addSession(STA.session.fromIbt(raw, file));
+    const s = STA.session.fromIbt(raw, file);
+    s.meta.fileKey = keyForFile(file);
+    await addSession(s);
   }
 
   async function loadLmu(file) {
@@ -166,7 +282,9 @@
     const db = await STA.duck.open(file);
     try {
       const raw = await STA.lmu.read(db, { onProgress: (f) => busy('Reading ' + file.name, f) });
-      await addSession(STA.session.fromLmu(raw, file));
+      const s = STA.session.fromLmu(raw, file);
+      s.meta.fileKey = keyForFile(file);
+      await addSession(s);
     } finally { await db.close(); }
   }
 
@@ -205,6 +323,11 @@
     if (session.refLap) Object.assign(summary, STA.learning.snapshot(session, analysisFor(session).an, techFor(session)));
     await STA.library.saveSession(summary);
     if (session.setup) await STA.library.recordUse(session.setup, summary);
+    // The folder index remembers that this recording has been opened, and its best lap.
+    if (session.meta.fileKey) {
+      const e = await STA.folders.mark(session.meta.fileKey, { sessionId: session.id, bestLap: summary.bestLap || null, laps: summary.timedLaps || 0 });
+      if (e) { const i = state.lib.entries.findIndex((x) => x.id === e.id); if (i >= 0) state.lib.entries[i] = e; }
+    }
     await refreshLibrary();
   }
 
@@ -221,51 +344,6 @@
       if (first) addLap(id, first.idx);
       if (second) addLap(id, second.idx);
     }
-  }
-
-  /* Read just the setups out of every supported file in a folder. */
-  async function scanFolder(fileList) {
-    const files = Array.from(fileList || []).filter((f) => /\.(svm|ibt|duckdb)$/i.test(f.name));
-    if (!files.length) { say('warn', 'No .svm, .ibt or .duckdb files in that folder.'); return; }
-    const cap = files.slice(0, 600);
-    let found = 0, failed = 0;
-    for (let i = 0; i < cap.length; i++) {
-      const file = cap[i];
-      busy('Scanning ' + (i + 1) + ' of ' + cap.length, i / cap.length);
-      try {
-        const e = ext(file.name);
-        if (e === 'svm') { await loadSvm(file, true); found++; }
-        else if (e === 'ibt') {
-          const raw = await STA.ibt.read(file, { headerOnly: true });
-          const info = raw.sessionInfo || {}, wk = info.WeekendInfo || {}, di = info.DriverInfo || {};
-          if (!info.CarSetup) continue;
-          const idx = parseInt(di.DriverCarIdx, 10), drv = (di.Drivers || []).find((d) => parseInt(d.CarIdx, 10) === idx) || {};
-          const meta = { track: wk.TrackDisplayName || wk.TrackName || 'Unknown track', trackConfig: wk.TrackConfigName && wk.TrackConfigName !== 'N/A' ? wk.TrackConfigName : '' };
-          const when = raw.header.startDate ? raw.header.startDate * 1000 : file.lastModified;
-          const setup = STA.setup.fromIracing(info.CarSetup, { car: drv.CarScreenName || 'Unknown car', track: STA.session.trackName(meta),
-            name: String(di.DriverSetupName || file.name).replace(/\.sto$/i, ''), createdAt: when });
-          const rec = await STA.library.saveSetup(setup);
-          if (!rec.usage.lastUsed || when > rec.usage.lastUsed) await STA.library.updateSetup(rec.id, { usage: Object.assign(rec.usage, { lastUsed: when }) });
-          found++;
-        } else {
-          const db = await STA.duck.open(file);
-          try {
-            const mt = await STA.lmu.readMeta(db);
-            if (!mt.CarSetup) continue;
-            const meta = { track: mt.TrackName || 'Unknown track', trackConfig: mt.TrackLayout && mt.TrackLayout !== mt.TrackName ? mt.TrackLayout : '' };
-            const when = Date.parse(String(mt.RecordingTime || '').replace(/_/g, ':')) || file.lastModified;
-            const setup = STA.setup.fromLmuJson(mt.CarSetup, { car: mt.CarName || 'Unknown car', carClass: mt.CarClass || '', track: STA.session.trackName(meta), name: STA.session.runName(when), createdAt: when });
-            const rec = await STA.library.saveSetup(setup);
-            if (!rec.usage.lastUsed || when > rec.usage.lastUsed) await STA.library.updateSetup(rec.id, { usage: Object.assign(rec.usage, { lastUsed: when }) });
-            found++;
-          } finally { await db.close(); }
-        }
-      } catch (err) { failed++; console.warn(file.name, err); }
-    }
-    busy(null);
-    say(found ? 'ok' : 'warn', 'Folder scan: ' + found + ' setups read' + (failed ? ', ' + failed + ' files could not be read' : '') + (files.length > cap.length ? ' (stopped after ' + cap.length + ' files)' : '') + '.');
-    await refreshLibrary();
-    renderAll();
   }
 
   /* ---------- rail ---------- */
@@ -300,8 +378,7 @@
         ]),
         h('button', { class: 'x', type: 'button', 'aria-label': 'Close this session', title: 'Close this session', text: '×', onclick: (ev) => {
           ev.stopPropagation();
-          state.sessions = state.sessions.filter((x) => x.id !== s.id);
-          for (const e of state.overlay.filter((e) => e.sid === s.id)) removeLap(e.sid, e.lap);
+          closeSession(s.id);
           if (state.activeId === s.id) { state.activeId = state.sessions.length ? state.sessions[0].id : null; if (state.activeId) activate(state.activeId, !state.A); }
           renderAll();
         } }),
@@ -374,11 +451,11 @@
     const nav = $('tabs'); nav.innerHTML = '';
     for (const [id, label] of TABS) {
       nav.appendChild(h('button', { class: 'tab' + (state.tab === id ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': state.tab === id ? 'true' : 'false', text: label,
-        onclick: () => { state.tab = id; renderTabs(); STA.views.render(); } }));
+        onclick: () => { state.tab = id; renderTabs(); STA.views.render(); saveResume(); } }));
     }
   }
 
-  function renderAll() { renderTabs(); renderSessions(); renderLaps(); renderLapbar(); STA.views.render(); }
+  function renderAll() { renderTabs(); renderSessions(); renderLaps(); renderLapbar(); STA.views.render(); saveResume(); }
 
   /* ---------- start ---------- */
 
@@ -397,9 +474,9 @@
     $('unit-speed').addEventListener('change', (ev) => { state.speedUnit = ev.target.value; try { localStorage.setItem('sta-speed', state.speedUnit); } catch (e) { /* ignore */ } renderAll(); });
     $('theme-toggle').addEventListener('click', () => { applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); STA.views.render(); });
     $('pick-files').addEventListener('click', () => $('file-input').click());
-    $('pick-folder').addEventListener('click', () => $('folder-input').click());
+    $('pick-folder').addEventListener('click', () => addFolder());
     $('file-input').addEventListener('change', (ev) => { addFiles(ev.target.files); ev.target.value = ''; });
-    $('folder-input').addEventListener('change', (ev) => { scanFolder(ev.target.files); ev.target.value = ''; });
+    $('folder-input').addEventListener('change', (ev) => { addPickedFolder(ev.target.files); ev.target.value = ''; });
     const drop = $('drop');
     for (const type of ['dragenter', 'dragover']) root.addEventListener(type, (ev) => { ev.preventDefault(); drop.classList.add('over'); });
     for (const type of ['dragleave', 'drop']) root.addEventListener(type, (ev) => { ev.preventDefault(); if (type === 'drop' || ev.target === document.documentElement) drop.classList.remove('over'); });
@@ -408,8 +485,17 @@
     await STA.library.open();
     await refreshLibrary();
     if (STA.library.persistent === false) say('warn', 'This browser is not letting the page store data, so the setup library will only last until you close the tab. Use "Export library" in Setups and differences to keep it.');
+    await refreshLib();
     renderAll();
+    // Pick up new recordings without being asked: now, and whenever the window is looked at again.
+    // No prompt is shown here; a folder that needs one waits for a click in the Library tab.
+    if (state.lib.folders.length) scanLib(false);
+    let lastAuto = Date.now();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || !state.lib.folders.length || Date.now() - lastAuto < 20000) return;
+      lastAuto = Date.now(); scanLib(false);
+    });
   }
 
-  STA.app = { start, state, h, pick, active, sessionById, overlayLaps, addLap, removeLap, setRef, clearLaps, letterOf, colourVarOf, analysisFor, techFor, speed, speedUnit, simName, dateText, dayText, timeText, whenText, say, addFiles, scanFolder, refreshLibrary, renderAll, renderLapbar, renderLaps, activate };
+  STA.app = { start, state, h, pick, active, sessionById, overlayLaps, addLap, removeLap, setRef, clearLaps, letterOf, colourVarOf, analysisFor, techFor, speed, speedUnit, simName, dateText, dayText, timeText, whenText, say, addFiles, refreshLibrary, refreshLib, scanLib, addFolder, removeFolder, openCombo, renderAll, renderLapbar, renderLaps, activate };
 })(typeof window !== 'undefined' ? window : globalThis);

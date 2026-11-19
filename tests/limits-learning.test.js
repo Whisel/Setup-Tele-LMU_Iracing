@@ -438,3 +438,37 @@ test('what the driver says about a change is stored, exported and cleared with t
   R.set('run-x', 'rearWing|rear|+', { target: null });
   assert.deepStrictEqual(R.all(), {}, 'an emptied answer leaves nothing behind');
 });
+
+/* ---------- folder library ---------- */
+
+test('the folder index is grouped by sim, then car, then track, newest first', () => {
+  const e = (name, sim, car, track, when, extra) => Object.assign({ id: 'f:' + name, folderId: 'f', path: name, name, kind: 'run', sim, car, track, recordedAt: when }, extra || {});
+  const list = [
+    e('a.ibt', 'iracing', 'Super Formula Lights', 'Okayama – Full', 100, { sessionId: 's1', bestLap: 84.2 }),
+    e('b.ibt', 'iracing', 'Super Formula Lights', 'Okayama – Full', 300),
+    e('c.ibt', 'iracing', 'Super Formula Lights', 'Suzuka – Grand Prix', 200, { sessionId: 's2', bestLap: 110.5 }),
+    e('d.ibt', 'iracing', 'BMW M4 GT3', 'Spa', 50, { sessionId: 's3' }),
+    e('x.duckdb', 'lmu', 'Team WRT 2024 #46:WE2', 'Fuji Speedway', 400),
+    e('bad.ibt', 'iracing', 'x', 'y', 1, { error: 'not a telemetry file' }),
+    { id: 'f:s.svm', folderId: 'f', kind: 'setup', name: 's.svm' },
+  ];
+  const tree = STA.folders.tree(list, [{ sim: 'iracing', car: 'BMW M4 GT3', track: 'Spa', bestLap: 137.9 }]);
+  assert.deepStrictEqual(tree.map((s) => [s.sim, s.runs]), [['iracing', 4], ['lmu', 1]], 'unreadable files and setup files are not runs');
+  const sfl = tree[0].cars[0];
+  assert.deepStrictEqual([sfl.car, tree[0].cars[1].car], ['Super Formula Lights', 'BMW M4 GT3'], 'the car driven most recently comes first');
+  assert.deepStrictEqual(sfl.tracks.map((t) => [t.track, t.runs.length, t.unopened, t.best]), [['Okayama – Full', 2, 1, 84.2], ['Suzuka – Grand Prix', 1, 0, 110.5]]);
+  assert.deepStrictEqual(sfl.tracks[0].runs.map((r) => r.name), ['b.ibt', 'a.ibt']);
+  assert.strictEqual(tree[0].cars[1].tracks[0].best, 137.9, 'a best lap from an earlier visit is found through the session history');
+  assert.strictEqual(sfl.tracks[0].key, STA.folders.comboKey({ sim: 'iracing', car: 'super formula lights', track: 'Okayama - Full' }), 'the same combination under slightly different spelling');
+});
+
+test('where the driver left off is remembered per car and track', () => {
+  const R = STA.folders.resume; R.clear();
+  assert.strictEqual(R.last(), null);
+  R.set('iracing|sfl|okayama', { open: ['f:a.ibt'], active: 'f:a.ibt', overlay: [{ f: 'f:a.ibt', n: 4, ref: true }], tab: 'map', at: 1 });
+  R.set('lmu|wrt|fuji', { open: ['f:x.duckdb'], active: 'f:x.duckdb', overlay: [], tab: 'advice', at: 2 });
+  assert.strictEqual(R.last(), 'lmu|wrt|fuji');
+  assert.deepStrictEqual(R.get('iracing|sfl|okayama').overlay, [{ f: 'f:a.ibt', n: 4, ref: true }]);
+  assert.strictEqual(R.get('nothing'), null);
+  R.clear();
+});

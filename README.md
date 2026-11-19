@@ -9,6 +9,7 @@ It runs entirely on your computer. Nothing is uploaded.
 
 | Tab | What you get |
 |---|---|
+| Library | Your telemetry folders, sorted by sim, then car, then track. Opens a car and track the way you left it. |
 | Lap comparison | Any number of laps overlaid: speed, pedals, steering, gear, RPM, G forces and each lap's running time difference to the reference lap, with every driven line on a map and a corner-by-corner table. Laps can come from different sessions at the same track. |
 | Track map | The track drawn from your own position data, with the line coloured by speed, by throttle and brake, or by where each lap gains time. |
 | Telemetry tables | Lap table, corner table, samples every 5–100 m, and tyre, brake and ride-height readings. Every table saves as CSV. |
@@ -16,6 +17,33 @@ It runs entirely on your computer. Nothing is uploaded.
 | Driving technique | Where your own best sections add up to a faster lap, which corners vary most, coasting, how you apply and release the brake and pick up the throttle, and how to drive around each handling problem the setup advice found. |
 | Baseline setup | A starting setup for a car and track. Before proposing anything it checks whether you already have a setup in progress for that car and track, and tells you to carry on from it if so. |
 | Setups and differences | Every setup the app has seen, and a side-by-side table of how any two or more differ. |
+
+## Library: your telemetry folders, sorted
+
+Add a folder once with **Add a telemetry folder** (for example `Documents\iRacing\telemetry`
+and Le Mans Ultimate's `UserData\Telemetry`; add as many as you like). The app then:
+
+- **Indexes it.** It reads only the header of each recording to learn the sim, car, track
+  and time, and keeps that index between visits. Setups found in the files go into the setup
+  library. Nothing is copied or uploaded.
+- **Sorts it.** The Library tab lists sim, then car, then track, with the number of runs,
+  how many are new, when the car was last driven there and the best lap. **Runs** shows
+  each recording; **Open** loads the combination.
+- **Keeps it current.** New recordings are picked up when the app opens and whenever you
+  come back to its window, so there is nothing to add by hand after a run. A file the sim is
+  still writing is left for the next check.
+- **Picks up where you left off.** For each car and track the app remembers which runs
+  were open, which laps were overlaid, the reference lap and the tab. **Continue** on the
+  Library tab reopens the last combination that way, and adds a run recorded since.
+
+Opening a combination closes runs from other cars and tracks. Their history, setups and
+what the app has learned stay in the library.
+
+What the browser allows: Chrome and Edge can remember a folder. After the browser has been
+restarted it may ask once to read the folder again, which takes one click (**Allow and
+rescan**). Other browsers can read a folder for one visit only: the index is kept, but the
+folder has to be picked again before a file can be opened. Single files can still be
+dropped on the page in any browser.
 
 ## Sessions in recorded order
 
@@ -64,10 +92,9 @@ as a `.duckdb` file to `Le Mans Ultimate\UserData\Telemetry`. The file contains 
 telemetry and the setup that was on the car.
 
 **Setups on their own.** LMU setup files (`.svm`, in `UserData\player\Settings\<track>`)
-can be dropped in directly. **Scan a folder for setups** reads the setup out of every
-`.svm`, `.ibt` and `.duckdb` file in a folder without loading the telemetry, which is the
-quick way to tell the app what you have already been running. iRacing `.sto` setup files
-are encrypted and this app does not read or write them; load an `.ibt` driven on that
+can be dropped in directly. Adding the folder to the Library reads the setup out of every
+`.svm`, `.ibt` and `.duckdb` file in it without loading the telemetry, which is the quickest
+way to fill the setup library. iRacing `.sto` files are encrypted and this app does not read or write them; load an `.ibt` recorded with that
 setup instead. Telemetry recording is off until you press Alt+L, and the telemetry folder
 does not exist until the first recording.
 
@@ -181,15 +208,30 @@ Every session you load leaves a short record in the library: the balance in each
 phase, the findings, typical lap time and which setup was on the car. No raw telemetry is
 kept. The app uses those records in three ways.
 
-- **Did the last change work?** When the session before this one (same car, same track)
-  used a different setup, the app lists what you changed, what each change is normally
-  meant to fix, how that measure moved, and a result: helped, no clear difference, made it
-  worse, or helped but went too far. Where a change did not help it shows the driving
-  technique for the same problem.
-- **Suggestions re-ordered by results on this car.** Each kind of change (for example
-  "soften the front anti-roll bar") keeps a tally per car across all tracks. Changes that
-  have helped move up. A change with two results against it and none for it is moved to
-  the bottom, so the next alternative leads. Each suggestion shows its record.
+- **Did the last change work?** When the run before this one (same car, same track) used a
+  different setup, every changed setting is treated as an experiment and shown as one row:
+  - **Why** it was changed. The app reads this from its rules (the change is a usual answer
+    to something found in the earlier run). If it cannot, it asks: pick what the change was
+    for from the list. You can also correct the app's reading.
+  - **Got**: how that measure moved.
+  - **Result**: helped, no clear difference, or worse. You can overrule it ("I say: helped")
+    when you felt something the numbers do not show; the tally then uses your call.
+  - **What the app makes of it** when the expectation was missed:
+    - right direction but too small (a bigger step is offered next time)
+    - this setting does not drive the problem on this car (the next kind of setting is named)
+    - it went the wrong way
+    - your laps show a driving habit that produces the same problem
+    - the problem got smaller but the lap did not get faster, so it was not what was costing time
+- **Unexpected gains.** When a problem got better and nothing was aimed at it, the change
+  is credited. One clean result (a single change) or two shared ones make it an answer the
+  app offers for that problem on that car, marked "Learned on this car". If it later fails
+  for that problem, the lesson is withdrawn.
+- **What your runs have taught the app about this car.** The current understanding in
+  plain sentences, each with a confidence level: what works and by how much, what does not,
+  what was newly learned, and what a single change was worth in lap time.
+- **Suggestions re-ordered by results on this car.** Tallies are kept per change and per
+  problem, across all tracks. Changes that have helped move up. A change with two results
+  against it and none for it goes to the bottom, so the next alternative leads.
 - **Recurring problems shape the baseline.** A balance problem seen in two or more earlier
   sessions with a car is leaned against when a new baseline is built.
 
@@ -200,9 +242,10 @@ changed.
 
 What this cannot do: lap time also moves with track temperature, fuel, tyre wear and
 practice, so one comparison is weak evidence, and when several settings change at once the
-app cannot tell which one did what. It says so on the page when that applies. The learning
-re-orders and annotates the general rules; it does not invent new rules or learn how big a
-step your car needs.
+app cannot tell which one did what. It says so on the page when that applies. What it
+learns is limited to what it can measure: which change moved which problem, in which
+direction, and whether one step was enough. It does not model the car, and it only knows
+why you changed something if the rules explain it or you tell it.
 
 ## How the advice is laid out
 
@@ -305,6 +348,7 @@ the app without your own data:
     js/data/car-limits.js per-car limits for iRacing, with their sources
     js/analysis/          handling analysis, advice rules, driving technique,
                           learning from earlier sessions, baseline
+    js/store/folders.js   watched folders, the file index, where you left off
     js/store/library.js   browser-side setup and session library
     js/ui/                charts, DuckDB loader, app shell and tabs
     vendor/duckdb/        bundled DuckDB browser client (see its README)
