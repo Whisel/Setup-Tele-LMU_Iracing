@@ -101,3 +101,47 @@ test('applyChange: steps respect the range, numeric values keep their unit, repe
   STA.setup.applyChange(bias, { text: 'Move brake bias forward by 0.5%' });
   assert.strictEqual(bias.raw, 'Move brake bias forward by 0.5% (from 51.5:48.5)');
 });
+
+/* Garage names taken from the iRacing manuals for the two Super Formula cars. */
+const SF23 = { TiresAero: { FrontAero: { FlapAngle: '21.0 deg' }, RearAero: { WingAngle: '14.0 deg', GurneyFlap: '5 mm' },
+  AeroCalculator: { FrontRhAtSpeed: '15.0 mm', DownforceBalance: '44.1%' } },
+  Chassis: { Front: { ArbDiameter: '18 mm' }, LeftFront: { RideHeight: '18.0 mm' }, RightFront: { RideHeight: '18.0 mm' }, LeftRear: { RideHeight: '45.0 mm' }, RightRear: { RideHeight: '45.0 mm' } } };
+const SFL = { TiresAero: { AeroSetup: { AeroPackage: 'Medium DF', FrontFlapConfiguration: 'High DF flap', FrontFlapAngle: '18.0 deg', FrontFlapGurneyFlap: 'None',
+  RearUpperFlapAngle: '12.0 deg', RearBeamWingAngle: '8.0 deg' } } };
+const roles = (s) => Object.fromEntries(s.params.filter((p) => p.role && !p.derived).map((p) => [p.id.split('/').pop(), p.role + ':' + (p.axle || '')]));
+
+test('wings and flaps: the end of the car comes from the name or the section, and add-ons are kept apart from the main element', () => {
+  const sf = STA.setup.fromIracing(SF23, { car: 'Super Formula SF23 - Toyota', track: 'Suzuka', name: 'sf' });
+  assert.deepStrictEqual([roles(sf).flapangle, roles(sf).wingangle, roles(sf).gurneyflap], ['frontAero:front', 'rearWing:rear', 'rearAeroPart:rear']);
+  const sfl = STA.setup.fromIracing(SFL, { car: 'Super Formula Lights', track: 'Suzuka', name: 'sfl' });
+  assert.deepStrictEqual(roles(sfl), { aeropackage: 'aeroTrim:', frontflapconfiguration: 'frontAeroPart:front', frontflapangle: 'frontAero:front', frontflapgurneyflap: 'frontAeroPart:front',
+    rearupperflapangle: 'rearWing:rear', rearbeamwingangle: 'rearAeroPart:rear' });
+  // a front wing is never read as the rear wing, whatever it is called
+  const other = STA.setup.fromIracing({ Aero: { FrontWingAngle: '5.0 deg', RearWingAngle: '9.0 deg', RearWingWicker: '0.5 in' }, Chassis: { Rear: { WingAngle: '6 deg' }, Front: { WingAngle: '3 deg' } } }, { car: 'x', track: 'x', name: 'x' });
+  assert.deepStrictEqual(other.params.map((p) => p.role + ':' + p.axle), ['frontAero:front', 'rearWing:rear', 'rearAeroPart:rear', 'rearWing:rear', 'frontAero:front']);
+  // unchanged: GT3 splitter and wing, LMU wings
+  const gt3 = STA.setup.fromIracing(STA.yaml.parse(SETUP_YAML).CarSetup, { car: 'Test GT3', track: 'x', name: 'x' });
+  assert.deepStrictEqual([roles(gt3).rearwingsetting, roles(gt3).frontsplitter], ['rearWing:rear', 'frontAero:front']);
+});
+
+test('Super Formula: the front flap is offered for fast-corner understeer, and aero changes between runs are all seen', () => {
+  const sf = STA.setup.fromIracing(SF23, { car: 'Super Formula SF23 - Toyota', track: 'Suzuka', name: 'sf' });
+  const fast = [{ id: 'us-entry-high', kind: 'understeer', phase: 'entry', band: 'high', title: 'Corner entry understeer in fast corners', severity: 0.9, confidence: 'medium' }];
+  const adv = STA.advisor.advise({ findings: fast }, sf, {});
+  const flap = adv.suggestions.find((s) => s.blockKey === 'frontAero|front|+');
+  assert.ok(flap, JSON.stringify(adv.suggestions.map((s) => s.blockKey)));
+  assert.deepStrictEqual(flap.paramIds, ['tiresaero/frontaero/flapangle']);
+  assert.ok(!JSON.stringify(adv).includes('Front aero (not adjustable on this car)'));
+  const wing = STA.advisor.resolve(sf, 'rearWing', 'rear', '-', null);
+  assert.deepStrictEqual(wing.params.map((p) => p.id), ['tiresaero/rearaero/wingangle'], 'the gurney is not moved as if it were the wing');
+
+  const tree = JSON.parse(JSON.stringify(SFL)); Object.assign(tree.TiresAero.AeroSetup, { AeroPackage: 'Low DF', FrontFlapConfiguration: 'Low DF flap', FrontFlapAngle: '16.5 deg', FrontFlapGurneyFlap: '5mm', RearUpperFlapAngle: '9.0 deg' });
+  const a = STA.setup.fromIracing(SFL, { car: 'Super Formula Lights', track: 'Suzuka', name: 'a' }), b = STA.setup.fromIracing(tree, { car: 'Super Formula Lights', track: 'Suzuka', name: 'b' });
+  const ch = STA.learning.changesBetween(a, b).map((c) => c.key + ' ' + c.from + ' → ' + c.to).sort();
+  assert.deepStrictEqual(ch, ['aeroTrim||- Medium DF → Low DF', 'frontAero|front|- 18.0 deg → 16.5 deg', 'rearWing|rear|- 12.0 deg → 9.0 deg']);
+  // the flap type went down and the gurney went up in the same step: no single direction, so it is not judged as one change
+  const only = JSON.parse(JSON.stringify(SFL)); only.TiresAero.AeroSetup.FrontFlapGurneyFlap = '10mm';
+  const g = STA.learning.changesBetween(a, STA.setup.fromIracing(only, { car: 'Super Formula Lights', track: 'Suzuka', name: 'c' }));
+  assert.deepStrictEqual(g.map((c) => [c.key, c.title, c.from, c.to]), [['frontAeroPart|front|+', 'Add front flap gurney or a bigger flap', 'None', '10mm']]);
+  assert.strictEqual(STA.pace.purpose(g[0]), 'Grip in fast corners and under braking');
+});

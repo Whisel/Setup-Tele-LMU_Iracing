@@ -51,8 +51,8 @@
     ['spring', /springrate|springsetting|torsionbar|rollrate|springperch|\bspring\b/],
     ['rideHeight', /rideheight|ride height/],
     ['arb', /\barb|antiroll|antisway|swaybar|anti roll|farb|rarb/],
-    ['rearWing', /rearwing|rwsetting|wingangle|wingsetting|rear wing|winggurney|rear_wing/],
-    ['frontAero', /frontwing|fwsetting|frontflap|diveplane|splitter|front wing|canard|front_wing|noseheight/],
+    // Wings, flaps and their add-ons: which end of the car and which part is worked out in aeroRole().
+    ['aero', /wing|flap|gurney|wicker|diveplane|splitter|canard|noseheight|fwsetting|rwsetting/],
     ['aeroTrim', /downforcetrim|aeropackage|aerosetting/],
     ['slowBump', /lscomp|lowspeedcomp|slowbump|ls comp|lsbump/],
     ['fastBump', /hscomp|highspeedcomp|fastbump|hs comp|hsbump/],
@@ -73,11 +73,26 @@
     ['wedge', /wedge|trackbar/],
   ];
 
+  /* A wing, flap or add-on -> its role. The end of the car comes from the item's own name
+     ("FrontFlapAngle", "RWSetting") or, failing that, from its section ("Front aero / Flap
+     angle", as on the Super Formula SF23). A bare "Wing angle" is the rear wing.
+       frontAero / rearWing          the main element: the one the advice moves
+       frontAeroPart / rearAeroPart  gurneys, wickers, beam wings and flap types: read and
+                                     compared, but not moved by the advice */
+  function aeroRole(p) {
+    const parts = p.id.toLowerCase().split('/'), leaf = parts[parts.length - 1] + ' ' + String(p.label).toLowerCase(), section = parts.slice(0, -1).join('/');
+    const end = (s) => { const f = /front|fwsetting|\bfw\b|diveplane|splitter|canard|nose/.test(s), r = /rear|rwsetting|\brw\b|beam/.test(s); return f && !r ? 'front' : r && !f ? 'rear' : null; };
+    const axle = end(leaf) || end(section) || 'rear';
+    const part = /gurney|wicker|beam|config|type/.test(leaf);
+    return { role: axle === 'front' ? (part ? 'frontAeroPart' : 'frontAero') : (part ? 'rearAeroPart' : 'rearWing'), axle };
+  }
+
   function classify(p) {
     const key = (p.id + ' ' + p.label).toLowerCase();
     for (const [role, re] of ROLE_RULES) {
       if (re.test(key)) {
         if (role === 'derived') { p.derived = true; p.adjustable = false; continue; }
+        if (role === 'aero') { const a = aeroRole(p); p.role = a.role; p.axle = a.axle; break; }
         p.role = role; break;
       }
     }
@@ -97,8 +112,8 @@
     }
     if (p.role === 'brakeBias' || p.role === 'brakeMigration') p.axle = null;
     if (p.role === 'arb' && !p.axle) p.axle = /farb|f arb/.test(key) ? 'front' : /rarb|r arb/.test(key) ? 'rear' : null;
-    if (p.role === 'rearWing') p.axle = 'rear';
-    if (p.role === 'frontAero') p.axle = 'front';
+    if (p.role === 'rearWing' || p.role === 'rearAeroPart') p.axle = 'rear';
+    if (p.role === 'frontAero' || p.role === 'frontAeroPart') p.axle = 'front';
     return p;
   }
 

@@ -93,15 +93,15 @@
       sig: Math.max(0.05, 0.001 * lapB) };
   }
 
-  const AERO = { rearWing: true, frontAero: true };
+  const AERO = { rearWing: true, frontAero: true, rearAeroPart: true, frontAeroPart: true, aeroTrim: true };
   const BRAKES = { brakeBias: true, brakePressure: true, abs: true, brakeDuct: true };
   const DRIVE = { diffPreload: true, diffPower: true, diffCoast: true, tc: true };
 
   /* The zones a change acts on. `all` is every change made at the same time: when the wing was
      changed too, time on the straights is credited to the wing, not to the others. */
   function acts(change, all) {
-    if (change.role === 'rearWing') return 'SHB';
-    if (change.role === 'frontAero') return 'SH';
+    if (change.role === 'rearWing' || change.role === 'rearAeroPart' || change.role === 'aeroTrim') return 'SHB';
+    if (change.role === 'frontAero' || change.role === 'frontAeroPart') return 'SH';
     if (BRAKES[change.role]) return 'B';
     const aeroToo = (all || []).some((c) => AERO[c.role]);
     if (DRIVE[change.role]) return aeroToo ? 'LM' : 'LMS';

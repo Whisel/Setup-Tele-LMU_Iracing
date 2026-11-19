@@ -197,6 +197,13 @@ setup that was on the car.
   it. The limit is tied to the value: if "cannot go below 2" is recorded and a later setup
   has 4, a reduction is offered again. Limits can be removed from the list under the
   suggestions, and they are included in the library export.
+- **Wings and flaps.** Which end of the car a wing or flap belongs to is read from its own
+  name ("Front flap angle", "RWSetting") or, when the name does not say, from the garage
+  section it sits in: on the Super Formula SF23 the front wing is "Front aero / Flap
+  angle" and the rear is "Rear aero / Wing angle". The main element at each end is the
+  one the advice moves. Gurneys, wickers, beam wings, flap types and aero packages are
+  fixed choices, so the advice leaves them alone, but a change to any of them between
+  two runs is picked up and judged on lap time like a wing change.
 
 ## Car limits
 

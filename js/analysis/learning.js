@@ -76,6 +76,18 @@
   }
 
   /* Settings that differ between two setups, as { role, axle, dir } with '+' meaning the value went up. */
+  /* Aero choices that are words, not numbers ("None" / "5mm", "Low DF flap" / "High DF flap",
+     "Medium DF"): ranked so a change between them has a direction. */
+  const TEXT_LEVEL = { rearAeroPart: 1, frontAeroPart: 1, aeroTrim: 1 };
+  function level(p) {
+    const s = String(p.raw).toLowerCase();
+    if (/^\s*(none|off|no)\b/.test(s)) return 0;
+    if (/low/.test(s)) return 1;
+    if (/med/.test(s)) return 2;
+    if (/high/.test(s)) return 3;
+    return U.isNum(p.num) ? p.num : null;
+  }
+
   function changesBetween(a, b) {
     if (!a || !b) return [];
     const bMap = new Map(b.params.map((p) => [p.id, p])), groups = new Map();
@@ -85,6 +97,7 @@
       let d = null;
       if (U.isNum(pa.num) && U.isNum(pb.num) && String(pa.unit).toLowerCase() === String(pb.unit).toLowerCase()) d = pb.num - pa.num;
       else if (pa.index != null && pb.index != null) d = pb.index - pa.index;
+      else if (TEXT_LEVEL[pa.role]) { const x = level(pa), y = level(pb); if (x != null && y != null) d = y - x; }
       if (!d || Math.abs(d) < 1e-9) continue;
       const key = pa.role + '|' + (pa.axle || '');
       const g = groups.get(key) || { role: pa.role, axle: pa.axle || null, up: 0, down: 0, from: [], to: [] };

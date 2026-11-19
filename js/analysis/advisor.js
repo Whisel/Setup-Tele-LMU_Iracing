@@ -19,6 +19,10 @@
     rideHeight: { name: 'ride height', t: ['Raise the {a} ride height', 'Lower the {a} ride height'], by: 'about 1 mm', index: true, units: { mm: 1, cm: 0.1, m: 0.001, in: 0.04 } },
     rearWing: { name: 'rear wing', t: ['Add rear wing', 'Take off rear wing'], by: '1 step', index: true, intStep: 1, fixedAxle: true },
     frontAero: { name: 'front aero', t: ['Add front downforce', 'Take off front downforce'], by: '1 step', index: true, intStep: 1, fixedAxle: true },
+    // Read from the setup and compared between runs, but not moved by the advice: their steps are fixed choices.
+    rearAeroPart: { name: 'rear gurney / beam wing', t: ['Add rear gurney or beam wing', 'Take off rear gurney or beam wing'], by: '1 step', fixedAxle: true },
+    frontAeroPart: { name: 'front flap gurney / type', t: ['Add front flap gurney or a bigger flap', 'Take off front flap gurney or fit a smaller flap'], by: '1 step', fixedAxle: true },
+    aeroTrim: { name: 'aero package', t: ['Fit a higher-downforce aero package', 'Fit a lower-downforce aero package'], by: '1 step' },
     pressure: { name: 'tyre pressure', t: ['Raise the {a} tyre pressures', 'Lower the {a} tyre pressures'], by: 'about 0.5 psi (3–4 kPa)', index: true, indexSteps: 3, units: { kpa: 3.5, psi: 0.5, bar: 0.03 } },
     camber: { name: 'camber', t: ['Reduce negative camber on the {a} wheels', 'Add negative camber on the {a} wheels'], by: '0.2°', units: { deg: 0.2, '°': 0.2 } },
     toe: { name: 'toe', t: ['Add toe-in on the {a} wheels', 'Add toe-out on the {a} wheels'], by: 'one small step' },
