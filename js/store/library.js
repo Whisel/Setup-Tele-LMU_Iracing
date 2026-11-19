@@ -111,13 +111,17 @@
   async function removeSession(id) { await (await open()).del('sessions', id); }
 
   async function exportAll() {
-    return { app: 'setup-telemetry', version: 1, exportedAt: new Date().toISOString(), setups: await setups(), sessions: await sessions(), blocked: blockedAll() };
+    return { app: 'setup-telemetry', version: 1, exportedAt: new Date().toISOString(), setups: await setups(), sessions: await sessions(), blocked: blockedAll(), reasons: reasonsAll() };
   }
   async function importAll(data) {
     if (!data || data.app !== 'setup-telemetry' || !Array.isArray(data.setups)) throw new Error('This is not a library export from this app.');
     const b = await open();
     for (const s of data.setups) if (s && s.id && Array.isArray(s.params)) await b.put('setups', s);
     for (const s of data.sessions || []) if (s && s.id) await b.put('sessions', s);
+    if (data.reasons && typeof data.reasons === 'object') {
+      for (const sid of Object.keys(data.reasons)) if (data.reasons[sid] && typeof data.reasons[sid] === 'object') reasonsAll()[sid] = Object.assign({}, data.reasons[sid], reasonsAll()[sid]);
+      reasonsSave();
+    }
     if (data.blocked && typeof data.blocked === 'object') {
       for (const k of Object.keys(data.blocked)) {
         if (!Array.isArray(data.blocked[k])) continue;
@@ -128,7 +132,30 @@
     }
     return { setups: data.setups.length, sessions: (data.sessions || []).length };
   }
-  async function clearAll() { const b = await open(); await b.clear('setups'); await b.clear('sessions'); blocked.clear(); }
+  async function clearAll() { const b = await open(); await b.clear('setups'); await b.clear('sessions'); blocked.clear(); reasons.clear(); }
+
+  /* What the driver has said about a setup change: what it was for, and their own verdict.
+     Keyed by the session the change led into, then by the change ("role|axle|dir"). */
+  let reasonsMem = null;
+  function reasonsAll() {
+    if (reasonsMem) return reasonsMem;
+    try { reasonsMem = JSON.parse(root.localStorage.getItem('sta-reasons') || '{}') || {}; } catch (e) { reasonsMem = {}; }
+    return reasonsMem;
+  }
+  function reasonsSave() { try { root.localStorage.setItem('sta-reasons', JSON.stringify(reasonsAll())); } catch (e) { /* memory only */ } }
+  const reasons = {
+    all: () => reasonsAll(),
+    get: (sessionId, key) => (reasonsAll()[sessionId] || {})[key] || {},
+    set: (sessionId, key, patch) => {
+      const forSession = reasonsAll()[sessionId] || (reasonsAll()[sessionId] = {});
+      const rec = Object.assign({}, forSession[key], patch);
+      for (const k of Object.keys(rec)) if (rec[k] == null || rec[k] === '') delete rec[k];
+      if (Object.keys(rec).length) forSession[key] = rec; else delete forSession[key];
+      if (!Object.keys(forSession).length) delete reasonsAll()[sessionId];
+      reasonsSave();
+    },
+    clear: () => { reasonsMem = {}; reasonsSave(); },
+  };
 
   /* Changes the driver has marked as "not possible on this car", per sim and car.
      Small, so it lives in localStorage; falls back to memory if that is unavailable. */
@@ -170,6 +197,6 @@
   const sameCar = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
   const sameTrack = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
 
-  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked, limits, contested,
+  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked, limits, contested, reasons,
     get persistent() { return backend ? backend.persistent : null; } };
 })(typeof window !== 'undefined' ? window : globalThis);

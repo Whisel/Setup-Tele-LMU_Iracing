@@ -299,3 +299,142 @@ test('baseline: contesting the rear wing change also drops the front aero change
   assert.ok(again.notApplied.some((x) => x.label === 'Front aero' && /only wanted together with the rear wing change/.test(x.reason)));
   assert.ok(again.notApplied.some((x) => x.label === 'Rear wing' && /trade-off not wanted/.test(x.reason)));
 });
+
+/* ---------- reasoning: why a change was made, what happened, what the app now thinks ---------- */
+
+const usMidLow = { id: 'us-mid-low', kind: 'understeer', phase: 'mid', band: 'low', title: 'Mid-corner understeer in slow corners', severity: 0.7 };
+const bal = (midLow, entryAll) => ({ entry: { low: null, medium: null, high: null, all: entryAll == null ? 0 : entryAll }, mid: { low: midLow, medium: null, high: null, all: midLow }, exit: { low: null, medium: null, high: null, all: 0 } });
+let runNo = 0;
+const run = (setup, midLow, extra) => Object.assign({ id: 'run-' + (++runNo), sim: 'iracing', car: 'Test GT3', track: 'Test Ring', recordedAt: 1767225600000 + runNo * 3600000,
+  bestLap: 90, medianLap: 90.2, lapSpread: 0.1, setupId: setup.id, balance: bal(midLow), findings: midLow >= 0.25 ? [usMidLow] : [], metrics: {}, habits: [] }, extra || {});
+const base = () => setupFor('Test GT3');
+const softBar = () => setupFor('Test GT3', (y) => y.replace('ArbBlades: 3', 'ArbBlades: 2'));
+const softerBar = () => setupFor('Test GT3', (y) => y.replace('ArbBlades: 3', 'ArbBlades: 1'));
+const moreWing = () => setupFor('Test GT3', (y) => y.replace('RearWingSetting: 5', 'RearWingSetting: 6'));
+const evenMoreWing = () => setupFor('Test GT3', (y) => y.replace('RearWingSetting: 5', 'RearWingSetting: 7'));
+const judged = (a, b, sa, sb, notes) => STA.learning.judge(a, b, sa, sb, notes).changes[0];
+
+test('when a change misses its target, the app says which part of the reasoning failed', () => {
+  const a = base(), b = softBar();
+  const small = judged(run(a, 0.60), run(b, 0.57), a, b);
+  assert.deepStrictEqual([small.why, small.verdict, small.cause], ['app', 'none', 'tooSmall']);
+  assert.match(small.rethink, /Right direction, too small/);
+  assert.match(small.targets[0].mechanism, /front grip/, 'the reasoning behind the change is on record');
+
+  const nothing = judged(run(a, 0.60), run(b, 0.60), a, b);
+  assert.strictEqual(nothing.cause, 'noLever');
+  assert.match(nothing.rethink, /does not drive it on this car\. Next: /, nothing.rethink);
+  assert.ok(!/anti-roll bar/.test(nothing.rethink.split('Next:')[1]), 'the next idea is a different kind of setting: ' + nothing.rethink);
+
+  const habit = judged(run(a, 0.60), run(b, 0.60, { habits: [{ relates: 'understeer|mid', title: 'Early, hesitant throttle' }] }), a, b);
+  assert.strictEqual(habit.cause, 'driver');
+  assert.match(habit.rethink, /your laps show early, hesitant throttle: likely the driving/);
+
+  const wrong = judged(run(a, 0.60), run(b, 0.70), a, b);
+  assert.deepStrictEqual([wrong.verdict, wrong.cause], ['hurt', 'wrongWay']);
+
+  const far = judged(run(a, 0.60), run(b, -0.20), a, b);
+  assert.deepStrictEqual([far.verdict, far.cause, far.overshot], ['helped', 'overshot', true]);
+
+  const fixedButSlower = judged(run(a, 0.60), run(b, 0.20, { medianLap: 91.5 }), a, b);
+  assert.deepStrictEqual([fixedButSlower.verdict, fixedButSlower.cause], ['none', 'notTheLimit']);
+
+  const good = judged(run(a, 0.60), run(b, 0.20), a, b);
+  assert.deepStrictEqual([good.verdict, good.cause, good.rethink], ['helped', 'asExpected', 'As expected.']);
+});
+
+test('the driver can say what a change was for, and overrule the telemetry', () => {
+  const a = base(), b = moreWing();
+  const before = run(a, 0.0, { balance: bal(0.0, -0.20) }), after = run(b, 0.0, { balance: bal(0.0, -0.05) });
+  const blind = judged(before, after, a, b);
+  assert.deepStrictEqual([blind.why, blind.cause, blind.targets.length], ['unknown', 'lapOnly', 0]);
+  assert.match(blind.rethink, /No reason on record: lap unchanged\. Say what it was for\./);
+  assert.ok(STA.learning.intentChoices(before).some((o) => o.value === 'g:oversteer|entry'));
+
+  const told = judged(before, after, a, b, { 'rearWing|rear|+': { target: 'g:oversteer|entry' } });
+  assert.deepStrictEqual([told.why, told.verdict, told.targets[0].title, told.targets[0].text], ['driver', 'helped', 'Entry oversteer', '−20% → −5%']);
+
+  const overruled = judged(before, after, a, b, { 'rearWing|rear|+': { target: 'g:oversteer|entry', verdict: 'hurt' } });
+  assert.deepStrictEqual([overruled.verdict, overruled.cause, overruled.auto], ['hurt', 'yourCall', 'helped']);
+  assert.match(overruled.rethink, /Your call \(telemetry said helped\)/);
+
+  // a stated problem the telemetry never showed cannot be judged by numbers, only by the driver
+  const unseen = judged(before, after, a, b, { 'rearWing|rear|+': { target: 'g:understeer|exit' } });
+  assert.strictEqual(unseen.cause, 'notSeen');
+  assert.strictEqual(judged(before, after, a, b, { 'rearWing|rear|+': { target: 'g:understeer|exit', verdict: 'helped' } }).verdict, 'helped');
+  const trying = judged(before, after, a, b, { 'rearWing|rear|+': { target: 'none' } });
+  assert.deepStrictEqual([trying.why, trying.rethink], ['none', 'No target: lap unchanged.']);
+  // a stated reason that was measured by a wheel-speed share
+  const lock = judged(run(a, 0, { metrics: { frontLock: 0.08 } }), run(b, 0, { metrics: { frontLock: 0.02 } }), a, b, { 'rearWing|rear|+': { target: 'g:frontLock' } });
+  assert.deepStrictEqual([lock.verdict, lock.targets[0].text], ['helped', '8.0% → 2.0% of the time']);
+});
+
+test('an unexpected gain is credited to the change and offered for that problem from then on', () => {
+  const a = base(), b = moreWing(), c = evenMoreWing();
+  const r1 = run(a, 0.60), r2 = run(b, 0.30);
+  const j = STA.learning.judge(r1, r2, a, b);
+  assert.strictEqual(j.changes[0].why, 'unknown', 'more rear wing is not a textbook answer to slow-corner understeer');
+  assert.deepStrictEqual(j.bonus.map((x) => [x.key, x.text, x.credit]), [['understeer|mid', '+60% → +30%', ['rearWing|rear|+']]]);
+
+  const know = STA.learning.knowledge([r1, r2], [a, b], { sim: 'iracing', car: 'Test GT3' });
+  assert.deepStrictEqual(know.links.get('understeer|mid').map((e) => [e.key, e.n]), [['rearWing|rear|+', 1]]);
+  assert.match(know.relay[0].text, /^New: add rear wing also cut mid-corner understeer \(1 run\)\. Now offered for it\.$/);
+  assert.strictEqual(know.relay[0].confidence, 'low');
+
+  // The next time that problem shows up, the learned answer leads and says where it came from.
+  const adv = STA.advisor.advise({ findings: [Object.assign({ confidence: 'medium' }, usMidLow)] }, b, { learned: know.links, outcomes: know.stats });
+  assert.deepStrictEqual([adv.suggestions[0].blockKey, adv.suggestions[0].learned], ['rearWing|rear|+', 1]);
+  assert.match(adv.suggestions[0].effect, /Learned from your own runs/);
+  assert.ok(STA.advisor.advise({ findings: [Object.assign({ confidence: 'medium' }, usMidLow)] }, b).suggestions[0].blockKey !== 'rearWing|rear|+', 'without the lesson it is not offered');
+
+  // Tried again on the strength of that lesson and it works: now it is a tested answer, not a one-off.
+  const r3 = run(c, 0.05);
+  const again = STA.learning.knowledge([r1, r2, r3], [a, b, c], { sim: 'iracing', car: 'Test GT3' });
+  const last = again.judged.get(r3.id).changes[0];
+  assert.deepStrictEqual([last.why, last.verdict, last.targets[0].mechanism], ['app', 'helped', 'Learned on this car: it cut this problem before.']);
+  assert.ok(again.relay.some((x) => x.kind === 'works' && /Add rear wing works for mid-corner understeer \(1 of 1 run\)/.test(x.text)), JSON.stringify(again.relay));
+
+  // Tried again and it does nothing: the lesson is withdrawn.
+  const r3b = run(c, 0.30);
+  const gone = STA.learning.knowledge([r1, r2, r3b], [a, b, c], { sim: 'iracing', car: 'Test GT3' });
+  assert.strictEqual(gone.links.has('understeer|mid'), false);
+  assert.ok(gone.relay.some((x) => x.kind === 'fails' && /Add rear wing does not move mid-corner understeer/.test(x.text)));
+});
+
+test('a gain shared between two changes is not learned from a single run', () => {
+  const a = base(), both = setupFor('Test GT3', (y) => y.replace('RearWingSetting: 5', 'RearWingSetting: 6').replace('BrakePressureBias: 54.0%', 'BrakePressureBias: 55.0%'));
+  const know = STA.learning.knowledge([run(a, 0.60), run(both, 0.30)], [a, both], { sim: 'iracing', car: 'Test GT3' });
+  assert.strictEqual(know.links.size, 0);
+  assert.strictEqual(STA.learning.judge(run(a, 0.60), run(both, 0.30), a, both).bonus[0].credit.length, 2);
+});
+
+test('a step that was too small is offered again as a bigger one', () => {
+  const a = base(), b = softBar();
+  const know = STA.learning.knowledge([run(a, 0.60), run(b, 0.57)], [a, b], { sim: 'iracing', car: 'Test GT3' });
+  assert.strictEqual(know.stats.get('arb|front|-').by['understeer|mid'].last, 'tooSmall');
+  assert.ok(know.relay.some((x) => x.kind === 'size' && /one step was too small\. A bigger step is offered/.test(x.text)));
+  const adv = STA.advisor.advise({ findings: [Object.assign({ confidence: 'medium' }, usMidLow)] }, b, { outcomes: know.stats, learned: know.links });
+  const bar = adv.suggestions.find((x) => x.blockKey === 'arb|front|-');
+  assert.deepStrictEqual([bar.amount, bar.bigger], ['2 steps', true]);
+  // ...unless the car has no room for it
+  const adv2 = STA.advisor.advise({ findings: [Object.assign({ confidence: 'medium' }, usMidLow)] }, softerBar(), { outcomes: know.stats });
+  const bar2 = adv2.suggestions.find((x) => x.blockKey === 'arb|front|-');
+  assert.ok(!bar2 || bar2.amount === '2 steps', 'a GT3 without a known bar range is not capped');
+});
+
+test('what the driver says about a change is stored, exported and cleared with the library', async () => {
+  await STA.library.open(true); await STA.library.clearAll();
+  const R = STA.library.reasons;
+  R.set('run-x', 'rearWing|rear|+', { target: 'g:oversteer|entry' });
+  R.set('run-x', 'rearWing|rear|+', { verdict: 'helped' });
+  assert.deepStrictEqual(R.get('run-x', 'rearWing|rear|+'), { target: 'g:oversteer|entry', verdict: 'helped' });
+  R.set('run-x', 'rearWing|rear|+', { verdict: null });
+  assert.deepStrictEqual(R.get('run-x', 'rearWing|rear|+'), { target: 'g:oversteer|entry' });
+  const dump = JSON.parse(JSON.stringify(await STA.library.exportAll()));
+  await STA.library.clearAll();
+  assert.deepStrictEqual(R.all(), {});
+  await STA.library.importAll(dump);
+  assert.strictEqual(R.get('run-x', 'rearWing|rear|+').target, 'g:oversteer|entry');
+  R.set('run-x', 'rearWing|rear|+', { target: null });
+  assert.deepStrictEqual(R.all(), {}, 'an emptied answer leaves nothing behind');
+});

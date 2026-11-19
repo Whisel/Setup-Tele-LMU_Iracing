@@ -183,7 +183,7 @@
     const p = params[0], unit = String(p.unit || '').toLowerCase();
     let by = R.by;
     if (m > 1) by = /^1 step/.test(R.by) ? R.by.replace('1 step', m + ' steps') : /clicks/.test(R.by) ? m * 2 + ' clicks' : R.by.replace(/(\d+(\.\d+)?)/, (x) => String(+(parseFloat(x) * m).toFixed(2)));
-    const change = { text: titleFor(role, dir, p.axle && !R.fixedAxle && params.every((q) => q.axle === p.axle) ? p.axle : null) + ' by ' + by };
+    const change = { by, text: titleFor(role, dir, p.axle && !R.fixedAxle && params.every((q) => q.axle === p.axle) ? p.axle : null) + ' by ' + by };
     if (R.units && U.isNum(p.num) && R.units[unit] != null) change.delta = sign * m * R.units[unit];
     else if (R.index && p.index != null && p.max != null) change.steps = sign * m * (R.indexSteps || 1);
     else if (R.intStep && U.isNum(p.num) && !p.unit && /^\s*-?\d+\s*$/.test(p.raw)) change.delta = sign * m * R.intStep;
@@ -285,7 +285,9 @@
   /* What earlier sessions say about a change on this car (see learning.js), as a score
      factor and a sentence. stats = { tried, helped, none, hurt }. */
   function applyHistory(s, outcomes) {
-    const st = outcomes && outcomes.get(s.blockKey);
+    const all = outcomes && outcomes.get(s.blockKey);
+    // The record for this particular problem when there is one, otherwise the change's record overall.
+    const st = all && all.by && s.targetKey && all.by[s.targetKey] ? all.by[s.targetKey] : all;
     if (!st || !st.tried) return;
     s.history = st;
     s.score *= U.clamp(1 + 0.3 * (st.helped - st.hurt) - 0.15 * st.none, 0.4, 1.6);
@@ -299,7 +301,9 @@
      opts.limits:   Map of "paramId|dir" -> { num, raw } limits the driver has reported.
      opts.track:    track name, for limits that only apply at one circuit.
      opts.outcomes: Map of "role|axle|dir" -> { tried, helped, none, hurt } from earlier sessions.
-     opts.contested: Map of "role|axle|dir" -> { reason } for changes the driver has contested. */
+     opts.contested: Map of "role|axle|dir" -> { reason } for changes the driver has contested.
+     opts.learned:  Map of problem ("understeer|mid") -> [{ role, axle, dir, n }], changes that cut that
+                    problem on this car although they are not a textbook answer to it (see learning.js). */
   function advise(analysis, setup, opts) {
     const suggestions = [], skipped = [], exhausted = [], byKey = new Map();
     const blocked = { blocked: (opts && opts.blocked) || null, limits: (opts && opts.limits) || null, contested: (opts && opts.contested) || null };
@@ -307,8 +311,13 @@
     const car = STA.carLimits ? STA.carLimits.apply(setup, opts && opts.track, blocked.limits) : null;
     const violations = fixViolations(setup, suggestions, byKey);
 
+    const outs = (opts && opts.outcomes) || null, learned = (opts && opts.learned) || null;
     for (const f of analysis.findings) {
-      const list = ruleFor(f);
+      const tk = STA.learning ? STA.learning.targetKey(f) : null;
+      // What this car has taught the app comes before the general rules.
+      const own = ((learned && tk && learned.get(tk)) || []).map((e) => ({ role: e.role, axle: e.axle, dir: e.dir, learned: e.n, lone: true,
+        effect: 'Cut this problem on this car before (' + e.n + (e.n === 1 ? ' run' : ' runs') + '). Learned from your own runs; not a textbook answer.', cost: 'Based on your runs only' }));
+      const list = own.concat(ruleFor(f));
       let taken = 0;
       const unavailable = [], contestedHere = [];
       // A suggestion that stands in for a contested one says so.
@@ -317,7 +326,7 @@
         if (taken >= 2) break;
         const axle0 = first.axle === '@' ? f.axle : first.axle;
         // The option itself, then the closest equivalents if it cannot be used.
-        const tries = [Object.assign({}, first, { axle: axle0 })].concat(equivalents(first.role, axle0, first.dir));
+        const tries = [Object.assign({}, first, { axle: axle0 })].concat(first.lone ? [] : equivalents(first.role, axle0, first.dir));
         let failedWhy = null;
         for (const opt of tries) {
           const axle = opt.axle || null;
@@ -334,10 +343,13 @@
             existing.conflict = (existing.conflict || []).concat(f.title);
             continue; // wanted the other way round for another finding: look for a different route
           }
-          const change = buildChange(opt.role, opt.dir, r.params);
+          // One step moved it the right way but not enough last time: offer two.
+          const past = outs && outs.get(blockKey(opt.role, axle, opt.dir)), mine = past && past.by && tk ? past.by[tk] : null;
+          const bigger = !!(mine && !mine.helped && mine.last === 'tooSmall');
+          const change = buildChange(opt.role, opt.dir, r.params, bigger ? 2 : 1);
           const s = {
             key, blockKey: blockKey(opt.role, axle, opt.dir), role: opt.role, axle, dir: opt.dir, title: change.cappedAt != null ? change.text : titleFor(opt.role, opt.dir, axle),
-            amount: change.cappedAt != null ? '' : ROLE[opt.role].by, paramIds: r.params.map((p) => p.id), current: SU().describe(r.params), change,
+            amount: change.cappedAt != null ? '' : change.by, targetKey: tk, learned: opt.learned || 0, bigger, paramIds: r.params.map((p) => p.id), current: SU().describe(r.params), change,
             effect: opt.effect, cost: opt.cost, reasons: [f.title], findingIds: [f.id], confidence: f.confidence, primary: taken === 0,
             insteadOf: opt === tries[0] ? null : failedWhy, score: f.severity * (taken === 0 ? 1 : 0.6),
           };

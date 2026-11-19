@@ -375,6 +375,8 @@
       const tags = [];
       if (x.alternativeTo) tags.push(['warn', 'Instead of: ' + x.alternativeTo.join('; ')]);
       else if (x.insteadOf) tags.push(['warn', 'Instead of: ' + x.insteadOf]);
+      if (x.learned) tags.push(['good', 'Learned on this car']);
+      if (x.bigger) tags.push(['warn', 'Bigger step: one was too small last time']);
       if (x.historyText) tags.push([x.demoted ? 'bad' : 'good', x.historyText]);
       if (x.conflict) tags.push(['warn', 'Works against: ' + x.conflict.join('; ')]);
       const openMenu = ui().contestOpen === x.blockKey;
@@ -447,8 +449,9 @@
       ]);
     }
     // Only shown when there is an earlier session to compare with.
-    const review = reviewPanel(s);
+    const review = reviewPanel(s), learnt = learnedPanel(s);
     if (review) view().appendChild(review);
+    if (learnt) view().appendChild(learnt);
 
     view().appendChild(h('section', { class: 'panel' }, [
       h('h2', { text: 'What the telemetry shows' }),
@@ -472,33 +475,58 @@
         h('button', { class: 'link', type: 'button', text: 'Allow again', onclick: () => { STA.library.contested.remove(sim, car, e.contest); again(); } })]); }))]);
   }
 
-  /* Did the change made before this session do what it was meant to? */
+  /* Did the change made before this session do what it was meant to?
+     Each change is treated as an experiment: why it was made, what happened, and what the app now thinks. */
   function reviewPanel(s) {
-    const st = A().state, rv = STA.learning.review(st.summaries, st.setups, s);
+    const st = A().state, R = STA.library.reasons, rv = STA.learning.review(st.summaries, st.setups, s, R.all());
     const head = h('h2', { text: 'Did the last change work?' });
     if (!rv || rv.first) return null;
     const laps = (b, a) => 'Typical lap ' + U.fmtLap(b.medianLap || b.bestLap) + ' → ' + U.fmtLap(a.medianLap || a.bestLap);
     if (rv.sameSetup) return h('section', { class: 'panel' }, [head, h('p', { class: 'hint', text: 'Same setup as the run before (' + A().whenText(rv.before.recordedAt) + '). ' + laps(rv.before, rv.after) + '.' })]);
     const verdict = { helped: 'Helped', none: 'No clear difference', hurt: 'Worse' };
-    const rows = rv.changes.map((c) => ({
-      change: c.title, vals: c.from + ' → ' + c.to,
-      meant: c.targets.length ? c.targets.map((t) => t.title).join('; ') : '–',
-      verdict: h('span', {}, [h('span', { class: 'verdict ' + c.verdict, text: c.overshot ? 'Helped, too far' : verdict[c.verdict] }), ' ' + (c.targets.length ? c.targets.map((t) => t.text).join('; ') : '(lap time only)')]),
-    }));
-    const failed = rv.changes.filter((c) => c.targets.length && c.verdict !== 'helped'), over = rv.changes.filter((c) => c.overshot);
+    const again = () => { A().state.analysis.delete(s.id); ui().adviceChecked = null; render(); };
+    const rows = rv.changes.map((c) => {
+      const inferred = c.why === 'app' ? 'App\'s reading: ' + c.targets.map((t) => lower(t.title)).join('; ') : 'Not known: what was it for?';
+      return {
+        change: h('span', {}, [c.title, h('span', { class: 'evidence', text: ' ' + c.from + ' → ' + c.to })]),
+        why: h('select', { class: 'mini', 'aria-label': 'What was this change for? ' + c.title, onchange: (ev) => { R.set(rv.after.id, c.key, { target: ev.target.value || null }); again(); } },
+          [h('option', { value: '', selected: !c.note.target, text: inferred })].concat(rv.choices.map((o) => h('option', { value: o.value, selected: c.note.target === o.value, text: o.label })))),
+        got: c.targets.length ? c.targets.map((t) => t.text).join('; ') : '–',
+        verdict: h('span', {}, [h('span', { class: 'verdict ' + c.verdict, text: c.overshot && c.verdict === 'helped' ? 'Helped, too far' : verdict[c.verdict] }),
+          h('select', { class: 'mini', 'aria-label': 'Your own verdict on: ' + c.title, title: 'Overrule the telemetry if you felt otherwise', onchange: (ev) => { R.set(rv.after.id, c.key, { verdict: ev.target.value || null }); again(); } },
+            [['', 'Telemetry\'s call'], ['helped', 'I say: helped'], ['none', 'I say: no difference'], ['hurt', 'I say: worse']].map(([v, t]) => h('option', { value: v, selected: (c.note.verdict || '') === v, text: t })))]),
+        think: c.rethink,
+      };
+    });
+    const unknown = rv.changes.filter((c) => c.why === 'unknown').length;
+    const drive = rv.changes.filter((c) => c.targets.length && c.verdict !== 'helped' && (c.cause === 'driver' || c.cause === 'noLever'));
     const lap = rv.lap, lapWord = lap.rel == null ? '' : lap.word === 'same' ? ' (no real change)' : ' (' + Math.abs(lap.rel * 100).toFixed(2) + '% ' + lap.word + ')';
+    const titleOf = (key) => { const c = rv.changes.find((x) => x.key === key); return c ? lower(c.title) : key; };
     return h('section', { class: 'panel' }, [
       head,
       h('p', { class: 'hint', text: 'Against the run before (' + A().whenText(rv.before.recordedAt) + ', "' + rv.setupBefore.name + '"). ' + laps(rv.before, rv.after) + lapWord + '.' }),
-      rows.length ? table([{ key: 'change', label: 'Changed' }, { key: 'vals', label: 'From → to' }, { key: 'meant', label: 'Aimed at' }, { key: 'verdict', label: 'Result' }], rows)
+      unknown ? h('p', { class: 'instead', text: unknown + (unknown === 1 ? ' change has' : ' changes have') + ' no reason on record. Say what ' + (unknown === 1 ? 'it was' : 'each was') + ' for under "Why" and the app will judge it against that.' }) : null,
+      rows.length ? table([{ key: 'change', label: 'Changed' }, { key: 'why', label: 'Why' }, { key: 'got', label: 'Got' }, { key: 'verdict', label: 'Result' }, { key: 'think', label: 'What the app makes of it' }], rows, { cls: 'review' })
         : h('p', { class: 'empty', text: 'Only settings the app does not judge changed (fuel, gearing, cooling).' }),
-      over.length ? h('p', { class: 'instead', text: 'Too far: ' + over.map((c) => lower(c.title)).join('; ') + '. Go back half the step.' }) : null,
-      failed.length ? h('div', { class: 'skipped' }, [
-        h('h3', { text: 'Did not work: try from the seat' }),
-        h('ul', { class: 'plain' }, failed.map((c) => h('li', {}, [h('b', { text: c.targets[0].title + ': ' }), STA.technique.forTargets(c.targets).slice(0, 2).join(' ')]))),
+      rv.bonus.length ? h('ul', { class: 'plain gains' }, rv.bonus.map((b) => h('li', {}, [h('b', { text: 'Unexpected gain: ' }), lower(b.title) + ' ' + b.text + ', with nothing aimed at it. Credited to ' + b.credit.map(titleOf).join('; ') + '. ' +
+        (b.credit.length === 1 ? 'Now offered for this problem on this car.' : 'Shared between ' + b.credit.length + ' changes, so it needs a second run to count.')]))) : null,
+      drive.length ? h('div', { class: 'skipped' }, [
+        h('h3', { text: 'Try from the seat' }),
+        h('ul', { class: 'plain' }, drive.map((c) => h('li', {}, [h('b', { text: c.targets[0].title + ': ' }), STA.technique.forTargets(c.targets).slice(0, 2).join(' ')]))),
         h('button', { class: 'link', type: 'button', text: 'Open driving technique', onclick: () => { st.tab = 'technique'; A().renderAll(); } }),
       ]) : null,
-      h('p', { class: 'hint', text: (rv.changes.length > 1 ? rv.changes.length + ' changes at once, so the result is shared between them. ' : '') + 'One comparison is weak evidence: conditions and practice move lap time too.' }),
+      h('p', { class: 'hint', text: (rv.changes.length > 1 ? rv.changes.length + ' changes at once, so the result is shared between them. ' : '') + (lap.noisy ? 'Lap times in these runs vary a lot, which weakens this. ' : '') + 'One comparison is weak evidence.' }),
+    ]);
+  }
+
+  /* What the before-and-after runs have taught the app about this car. */
+  function learnedPanel(s) {
+    const know = A().analysisFor(s).know;
+    if (!know || !know.relay.length) return null;
+    return h('section', { class: 'panel' }, [
+      h('h2', { text: 'What your runs have taught the app about this car' }),
+      h('ul', { class: 'plain learned' }, know.relay.slice(0, 8).map((r) => h('li', { class: r.kind }, [r.text + ' ', confTag(r.confidence)]))),
+      know.relay.length > 8 ? more('learned-all', 'All ' + know.relay.length, [h('ul', { class: 'plain learned' }, know.relay.slice(8).map((r) => h('li', { class: r.kind }, [r.text + ' ', confTag(r.confidence)])))]) : null,
     ]);
   }
 
