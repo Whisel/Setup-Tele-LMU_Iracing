@@ -15,7 +15,13 @@ test('recorder client: a saved run is announced once, and a restarted recorder a
 test('recorder client: one plain line for every state', () => {
   const d = (cfg, st) => R.describe(cfg, st);
   const on = { on: true };
-  assert.deepStrictEqual(d({ on: false }, {}), { tone: 'off', text: 'iRacing recorder is off' });
+  assert.deepStrictEqual(d({ on: false }, {}), { tone: 'off', text: 'Recorder link is off' });
+  // the Le Mans Ultimate lap recorder answers on the same port and says which sim it is for
+  const lmu = (s) => d({ on: true }, { reachable: true, status: Object.assign({ sim: 'lmu' }, s) });
+  assert.deepStrictEqual(lmu({ connected: false }), { tone: 'waiting', text: 'Waiting for Le Mans Ultimate' });
+  assert.deepStrictEqual(lmu({ connected: true, inPits: true }), { tone: 'ready', text: 'In the pits: records when you leave' });
+  assert.deepStrictEqual(lmu({ connected: true, recording: true, laps: 1 }), { tone: 'rec', text: 'Recording: 1 lap so far, saved when you pit' });
+  assert.deepStrictEqual(lmu({ connected: true, recording: true, laps: 4 }), { tone: 'rec', text: 'Recording: 4 laps so far, saved when you pit' });
   assert.strictEqual(d(on, { reachable: false }).tone, 'missing');
   assert.strictEqual(d(on, { reachable: true, status: { connected: false } }).text, 'Waiting for iRacing');
   assert.strictEqual(d(on, { reachable: true, status: { connected: true, enabled: true, recording: true } }).tone, 'rec');

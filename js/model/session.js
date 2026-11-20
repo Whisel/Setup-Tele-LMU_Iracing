@@ -130,9 +130,9 @@
     const hz = 50, n = Math.max(2, Math.floor((lmu.tEnd - lmu.tStart) * hz) + 1);
     const t = new Float64Array(n);
     for (let i = 0; i < n; i++) t[i] = lmu.tStart + i / hz;
-    const c = (name, k, mode) => {
+    const c = (name, k, mode, Type) => {
       const s = lmu.cont[name]; if (!s) return null;
-      const o = U.interp(s.t, s.v, t, mode);
+      const o = Type ? U.interp(s.t, s.v, t, mode, Type) : U.interp(s.t, s.v, t, mode);
       if (k && k !== 1) for (let i = 0; i < n; i++) o[i] *= k;
       return o;
     };
@@ -155,7 +155,11 @@
       tyreTempO: tl && tr ? [tl[0], tr[1], tl[2], tr[3]] : null, tyreCarcass: w('TyresCarcassTemp'), tyreWear: w('Tyres Wear'),
       brakeTemp: w('Brakes Temp'), rideH: w('RideHeights'), suspPos: w('Susp Pos'),
       rideF: c('FrontRideHeight'), rideR: c('RearRideHeight'), pathLat: c('Path Lateral'),
+      // only in runs saved by the live lap recorder
+      velX: c('Local Vel Forward'), velY: c('Local Vel Lateral'), yawRate: c('Yaw Rate'),
     };
+    const px = c('Pos X', 1, null, Float64Array), py = c('Pos Y', 1, null, Float64Array);
+    if (px && py) { ch.x = px; ch.y = py; }
     if (!ch.speed) throw new Error('The recording has no Ground Speed channel.');
 
     // Unwrap the 10 Hz Lap Dist before interpolating, so the reset at the line does not smear.
@@ -199,7 +203,7 @@
       car: mt.CarName || 'Unknown car', carClass: mt.CarClass || '', driver: mt.DriverName || '', sessionType: mt.SessionType || '',
       recordedAt: Date.parse(String(mt.RecordingTime || '').replace(/_/g, ':')) || (file && file.lastModified) || Date.now(),
       trackLenHint: null, maxRpm: maxRpmEv && maxRpmEv.v.length ? maxRpmEv.v[maxRpmEv.v.length - 1] : null, steerUnit: '% lock',
-      setupName: '', weather: mt.WeatherConditions || '',
+      setupName: '', weather: mt.WeatherConditions || '', live: !!mt.Live,
     };
     let setup = null;
     if (mt.CarSetup) {
@@ -209,7 +213,7 @@
     }
     const warnings = (lmu.warnings || []).slice();
     if (mt.CarSetup && !setup) warnings.push('The setup stored in this recording could not be read.');
-    return finalize({ meta, hz, n, ch, marks, breaks, setup, warnings, lmuSmoothGps: true });
+    return finalize({ meta, hz, n, ch, marks, breaks, setup, warnings, lmuSmoothGps: !mt.Live });
   }
 
   /* ---------- shared processing ---------- */
@@ -221,8 +225,8 @@
     s._grids = new Map();
 
     // --- position in metres ---
-    let haveXY = false;
-    if (ch.lat && ch.lon) {
+    let haveXY = !!(ch.x && ch.y); // already in metres
+    if (!haveXY && ch.lat && ch.lon) {
       const [la0, la1] = U.minMax(ch.lat), [lo0, lo1] = U.minMax(ch.lon);
       const latC = (la0 + la1) / 2, lonC = (lo0 + lo1) / 2, R = 6371000, k = Math.PI / 180;
       let x = new Float64Array(n), y = new Float64Array(n);

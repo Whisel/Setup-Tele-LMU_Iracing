@@ -98,9 +98,14 @@
 
   /* One line for the display. tone: off | missing | waiting | idle | ready | rec */
   function describe(cfg, st) {
-    if (!cfg.on) return { tone: 'off', text: 'iRacing recorder is off' };
+    if (!cfg.on) return { tone: 'off', text: 'Recorder link is off' };
     if (!st.reachable) return { tone: 'missing', text: 'Recorder not found on this PC' };
     const s = st.status || {};
+    if (s.sim === 'lmu') { // the Le Mans Ultimate lap recorder: records by itself and saves in the pits
+      if (!s.connected) return { tone: 'waiting', text: 'Waiting for Le Mans Ultimate' };
+      if (s.recording) return { tone: 'rec', text: 'Recording: ' + (s.laps || 0) + (s.laps === 1 ? ' lap' : ' laps') + ' so far, saved when you pit' };
+      return { tone: 'ready', text: s.inPits ? 'In the pits: records when you leave' : 'Ready: records when you drive' };
+    }
     if (!s.connected) return { tone: 'waiting', text: 'Waiting for iRacing' };
     if (s.recording) return { tone: 'rec', text: 'Recording this run' };
     if (s.enabled) return { tone: 'ready', text: 'Ready: records when you drive' };

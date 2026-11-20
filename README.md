@@ -98,6 +98,43 @@ How it works, and what it does not do:
   before running a `.cmd` file that was downloaded from the internet.
 - iRacing only. Le Mans Ultimate has its own automatic recording setting in the game.
 
+## Le Mans Ultimate lap recorder
+
+Le Mans Ultimate closes its own telemetry file when the session ends. To see laps
+while the session is still on, run the lap recorder next to the game:
+
+1. In the game: **Settings > Gameplay > Enable Plugins = On**, then restart the game.
+2. Start `recorder/Start-LMU-Recorder.cmd` and leave its window open.
+3. In the app, turn on the recorder link (top of the Library tab) and add the folder
+   **Documents\\LMU live laps** to the Library once.
+
+What happens then:
+
+- The recorder reads the game's live data (the `LMU_Data` shared memory the game
+  publishes) 50 times a second and keeps the laps of the current run in memory. It
+  starts when the car leaves the pit lane.
+- **When the game reports the car in the pits** (pit lane, garage, or back at the
+  menus) the run is finished: its laps are written to a `.lmulaps` file and the app
+  opens it a moment later. A run with no whole lap is dropped.
+- The setup on the car is asked from the game's own local web service
+  (`/rest/garage/getPlayerGarageData`, read only) when the run is saved, so setup advice
+  works. If the game does not answer, the run is saved without it and the app says so.
+- "Save laps now" in the app saves the laps so far without waiting for the pits.
+- These runs also carry the car's own forward and sideways velocity and yaw rate,
+  which the game's `.duckdb` file does not, so **oversteer is measured** for them the
+  same way as for iRacing (see "Understeer or oversteer").
+
+Good to know:
+
+- It uses the same port (8765) as the iRacing recorder, so run one of them at a time.
+- Nothing is installed into the game and nothing is changed in it.
+- `Start-LMU-Recorder.cmd -SelfTest` checks the script on your PC;
+  `-DemoFile demo.lmulaps` writes a made-up three-lap run you can open in the app.
+- The positions of the values in the game's memory were worked out from the layout in
+  the game's plugin kit. The kit's header file is not part of this repository. A game
+  update that changes the layout will need the recorder updated.
+- Not yet tried against the game itself: see "Known limits".
+
 ## Sessions in recorded order
 
 Loaded sessions are listed in the order they were driven, earliest first, whatever order
@@ -429,6 +466,13 @@ browser or computer.
 
 ## Known limits
 
+- **The LMU lap recorder has not been run against the game.** It was built and tested
+  without Le Mans Ultimate: the self-test and a made-up session played into a copy of
+  the game's memory exercise the reading, the pit detection, the file and the app. What
+  that cannot show is whether the game puts every value where the recorder expects it,
+  whether "in the pits" switches at the moment you expect, and whether the game's web
+  service answers with the setup. If a first real run shows odd values, that is where
+  to look.
 - **iRacing lap handling has been checked against simulated files, not a full real
   session.** The `.ibt` reader itself was checked against a real iRacing file, but that
   file is a few seconds long. Lap splitting, lap times and corner detection on the iRacing

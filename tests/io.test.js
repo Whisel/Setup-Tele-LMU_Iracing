@@ -110,3 +110,40 @@ test('LMU reader rejects a database that is not a telemetry recording', async ()
   const db = { rows: async () => [{ name: 'something_else' }], cols: async () => ({}) };
   await assert.rejects(STA.lmu.read(db), /does not look like a Le Mans Ultimate/);
 });
+
+/* ---------- runs saved by the LMU lap recorder (.lmulaps) ---------- */
+
+const { makeLmuLaps } = require('./helpers/make-lmulaps.js');
+const SETUP_JSON = { VM_REAR_WING: { available: true, value: 5, stringValue: 'P5', minValue: 0, maxValue: 11 }, VM_FRONT_ANTISWAY: { available: true, value: 3, stringValue: 'P3', minValue: 0, maxValue: 9 } };
+
+test('a run from the LMU lap recorder reads like the game\'s own recording, with the extra live channels', async () => {
+  const run = require('./helpers/sim.js').drive({ laps: 4, hz: 50, grips: [1, 1, 1, 1], slip: true });
+  const file = makeLmuLaps(run, { setup: SETUP_JSON });
+  const head = await STA.lmuLive.read(file, { headerOnly: true });
+  assert.deepStrictEqual([head.meta.CarName, head.meta.TrackName, head.meta.Live, typeof head.meta.CarSetup], ['Test GT3 #1', 'Test Ring', true, 'string']);
+  const s = STA.session.fromLmu(await STA.lmuLive.read(file), { name: 'Test Ring_Test GT3 #1_2026-11-19T20_00_00Z.lmulaps' });
+  assert.deepStrictEqual([s.meta.sim, s.meta.car, s.meta.live, s.meta.recordedAt], ['lmu', 'Test GT3 #1', true, Date.parse('2026-11-19T20:00:00Z')]);
+  const done = s.laps.filter((l) => l.complete);
+  assert.ok(done.length >= 3, 'laps: ' + done.length);
+  for (let k = 0; k < done.length; k++) assert.ok(Math.abs(done[k].time - run.trueLaps[k + 1 < run.trueLaps.length ? k + 1 : k]) < 2, 'lap ' + k + ': ' + done[k].time);
+  assert.ok(s.ch.x && s.ch.y && s.ch.velX && s.ch.velY && s.ch.yawRate, 'position and the car\'s own velocities are carried');
+  assert.ok(s.corners.length >= 3, 'corners: ' + s.corners.length);
+  assert.ok(s.setup && s.setup.params.some((p) => p.role === 'rearWing'), 'the setup the game reported is read');
+  // the car's own velocities make the measured oversteer reading available for LMU too
+  const an = STA.handling.analyse(s);
+  assert.ok(an.balance && an.balance.slide, an.notes.join(' / '));
+  assert.deepStrictEqual(an.findings.filter((f) => f.kind === 'oversteer'), []);
+  const loose = STA.handling.analyse(STA.session.fromLmu(await STA.lmuLive.read(makeLmuLaps(require('./helpers/sim.js').drive({ laps: 4, hz: 50, grips: [1, 1, 1, 1], looseExit: 1 }))), { name: 'x.lmulaps' }));
+  assert.ok(loose.findings.some((f) => f.kind === 'oversteer' && f.phase === 'exit' && f.measured), JSON.stringify(loose.findings.map((f) => f.id)));
+});
+
+test('a damaged or foreign .lmulaps file is refused with a plain message, and a run without a setup says so', async () => {
+  const run = require('./helpers/sim.js').drive({ laps: 2, hz: 50, slip: true }), file = makeLmuLaps(run);
+  await assert.rejects(STA.lmuLive.read(Buffer.from('not a recorder file at all')), /not a run saved by the LMU lap recorder/);
+  await assert.rejects(STA.lmuLive.read(file.subarray(0, file.length - 1000)), /cut short/);
+  const bad = Buffer.from(file); bad.writeInt32LE(-5, 8);
+  await assert.rejects(STA.lmuLive.read(bad), /bad header length/);
+  const raw = await STA.lmuLive.read(file);
+  assert.match(raw.warnings.join(' '), /saved without the setup/);
+  assert.strictEqual(STA.session.fromLmu(raw, { name: 'x.lmulaps' }).setup, null);
+});

@@ -32,7 +32,7 @@
         <button class="btn" id="pick-folder" type="button" title="The app remembers the folder, sorts its recordings by sim, car and track, and finds new ones by itself">Add a telemetry folder</button>
         <button class="btn ghost" id="pick-files" type="button">Choose files</button>
       </div>
-      <input type="file" id="file-input" multiple hidden accept=".ibt,.duckdb,.svm,.json">
+      <input type="file" id="file-input" multiple hidden accept=".ibt,.duckdb,.lmulaps,.svm,.json">
       <input type="file" id="folder-input" webkitdirectory multiple hidden>
     </section>
     <section class="recorder" id="recorder" aria-label="iRacing recorder" aria-live="polite"></section>
@@ -58,6 +58,7 @@
 <script src="js/io/yaml-lite.js"></script>
 <script src="js/io/ibt.js"></script>
 <script src="js/io/lmu.js"></script>
+<script src="js/io/lmulive.js"></script>
 <script src="js/io/recorder.js"></script>
 <script src="js/data/car-limits.js"></script>
 <script src="js/model/setup.js"></script>

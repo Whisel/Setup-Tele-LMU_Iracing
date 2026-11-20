@@ -26,7 +26,7 @@
   'use strict';
   const STA = (root.STA = root.STA || {});
   const U = STA.util;
-  const EXT = /\.(ibt|duckdb|svm)$/i, MAX_FILES = 3000, MAX_DEPTH = 5;
+  const EXT = /\.(ibt|duckdb|lmulaps|svm)$/i, MAX_FILES = 3000, MAX_DEPTH = 5;
 
   // For this visit: folderId -> { handle } or { files: Map(path -> File) }.
   const live = new Map();
@@ -114,6 +114,14 @@
         recordedAt: raw.header.startDate ? raw.header.startDate * 1000 : file.lastModified, setupName: String(di.DriverSetupName || '').replace(/\.sto$/i, '') };
       m.track = STA.session.trackName({ track: wk.TrackDisplayName || wk.TrackName || 'Unknown track', trackConfig: wk.TrackConfigName && wk.TrackConfigName !== 'N/A' ? wk.TrackConfigName : '' });
       if (info.CarSetup) m.setup = STA.setup.fromIracing(info.CarSetup, { car: m.car, carClass: m.carClass, track: m.track, name: m.setupName || STA.session.runName(m.recordedAt), createdAt: m.recordedAt });
+      return m;
+    }
+    if (/\.lmulaps$/i.test(file.name)) { // a run from the LMU lap recorder: everything is in its header
+      const mt = (await STA.lmuLive.read(file, { headerOnly: true })).meta;
+      const m = { sim: 'lmu', car: mt.CarName || 'Unknown car', carClass: mt.CarClass || '', setupName: '',
+        recordedAt: Date.parse(String(mt.RecordingTime || '').replace(/_/g, ':')) || file.lastModified };
+      m.track = STA.session.trackName({ track: mt.TrackName || 'Unknown track', trackConfig: '' });
+      if (mt.CarSetup) m.setup = STA.setup.fromLmuJson(mt.CarSetup, { car: m.car, carClass: m.carClass, track: m.track, name: STA.session.runName(m.recordedAt), createdAt: m.recordedAt });
       return m;
     }
     // Le Mans Ultimate: the file name carries the track and time; the car is inside the database.

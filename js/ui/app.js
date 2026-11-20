@@ -146,9 +146,10 @@
         const e = ext(file.name);
         if (e === 'ibt') { await loadIbt(file); added++; }
         else if (e === 'duckdb') { await loadLmu(file); added++; }
+        else if (e === 'lmulaps') { await loadLmuLive(file); added++; }
         else if (e === 'svm') { await loadSvm(file); }
         else if (e === 'json') { await loadJson(file); }
-        else say('warn', file.name + ': this file type is not supported. Use .ibt, .duckdb, .svm or a library export (.json).');
+        else say('warn', file.name + ': this file type is not supported. Use .ibt, .duckdb, .lmulaps, .svm or a library export (.json).');
       } catch (err) {
         console.error(err);
         say('error', file.name + ': ' + (err && err.message ? err.message : String(err)));
@@ -200,7 +201,8 @@
   /* The recorder says a run has just been saved: index it and, if wanted, open it. */
   async function runFinished() {
     await new Promise((r) => setTimeout(r, 1500)); // let the sim finish closing the file
-    if (!state.lib.folders.length) { say('info', 'A run was recorded. Add your iRacing telemetry folder to the Library and new runs will open here by themselves.'); return; }
+    if (!state.lib.folders.length) { const lmu = STA.recorder.state.status && STA.recorder.state.status.sim === 'lmu';
+      say('info', 'A run was recorded. Add ' + (lmu ? 'the recorder\'s folder (Documents, "LMU live laps")' : 'your iRacing telemetry folder') + ' to the Library and new runs will open here by themselves.'); return; }
     const before = new Set(state.lib.entries.map((e) => e.id));
     // The sim has closed the file, so it is safe to read even though it was written seconds ago.
     await scanLib(false, null, { includeFresh: true });
@@ -227,7 +229,15 @@
       h('button', { class: 'link', type: 'button', text: cfg.on ? 'Turn off' : 'Turn on', title: cfg.on ? 'Stop talking to the recorder program' : 'Connect to the recorder program on this PC (see recorder/ in the app folder)', onclick: () => R.setOn(!cfg.on) }),
     ]));
     if (!cfg.on) return;
-    if (!st.reachable) { box.appendChild(h('p', { class: 'rec-hint', text: 'Start "Start-iRacing-Recorder" from the app\'s recorder folder on this PC.' })); return; }
+    if (!st.reachable) { box.appendChild(h('p', { class: 'rec-hint', text: 'Start "Start-iRacing-Recorder" or "Start-LMU-Recorder" from the app\'s recorder folder on this PC.' })); return; }
+    if (s.sim === 'lmu') { // records by itself; the one thing to ask for is to save now
+      box.appendChild(h('div', { class: 'rec-controls' }, [
+        s.recording && s.laps > 0 ? h('button', { class: 'btn ghost small', type: 'button', text: 'Save laps now', title: 'Saves the laps recorded so far without waiting for the pits', onclick: () => act('finish') }) : null,
+      ]));
+      if (s.lastFile) box.appendChild(h('p', { class: 'rec-hint', text: 'Last saved: ' + s.lastLaps + (s.lastLaps === 1 ? ' lap' : ' laps') + ' (' + s.lastFile + ')' }));
+      box.appendChild(h('label', { class: 'check' }, [h('input', { type: 'checkbox', checked: !!cfg.autoOpen, onchange: (ev) => { R.save({ autoOpen: ev.target.checked }); } }), ' Open a run when it is saved']));
+      return;
+    }
     box.appendChild(h('div', { class: 'rec-controls' }, [
       s.connected ? h('button', { class: 'btn ghost small', type: 'button', text: s.enabled ? 'Stop recording' : 'Start recording', onclick: () => act(s.enabled ? 'stop' : 'start') }) : null,
       s.connected && s.recording ? h('button', { class: 'btn ghost small', type: 'button', text: 'New file', title: 'Saves the file so far and starts a new one', onclick: () => act('restart') }) : null,
@@ -249,7 +259,7 @@
   /* Folder picked through the plain file dialog (browsers that cannot remember a folder). */
   async function addPickedFolder(fileList) {
     const f = await STA.folders.addPicked(fileList);
-    if (!f) { say('warn', 'No .ibt, .duckdb or .svm files in that folder.'); return; }
+    if (!f) { say('warn', 'No .ibt, .duckdb, .lmulaps or .svm files in that folder.'); return; }
     state.tab = 'library';
     await scanLib(true, f.id);
     renderAll();
@@ -330,6 +340,14 @@
       s.meta.fileKey = keyForFile(file);
       await addSession(s);
     } finally { await db.close(); }
+  }
+
+  /* A run saved by the LMU lap recorder while the session was still on. */
+  async function loadLmuLive(file) {
+    busy('Reading ' + file.name, 0.3);
+    const s = STA.session.fromLmu(await STA.lmuLive.read(file), file);
+    s.meta.fileKey = keyForFile(file);
+    await addSession(s);
   }
 
   async function loadSvm(file, quiet) {
