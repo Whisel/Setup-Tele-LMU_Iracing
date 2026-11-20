@@ -98,6 +98,29 @@ How it works, and what it does not do:
   before running a `.cmd` file that was downloaded from the internet.
 - iRacing only. Le Mans Ultimate has its own automatic recording setting in the game.
 
+## Recorders that start with the simulator
+
+You do not have to start a recorder by hand. A small watcher looks at the list of running
+programs every three seconds:
+
+- iRacing starts: the iRacing recorder starts. Le Mans Ultimate starts: the LMU lap
+  recorder starts. Each runs in its own minimised window.
+- The simulator closes: its recorder gets five seconds to save what it has, then it is
+  stopped.
+- A recorder that stops by itself while the simulator is still running is started again
+  (at most once every 30 seconds).
+
+Two ways to use it, both in the `recorder` folder:
+
+- `Start-Recorders.cmd` starts the watcher now. Leave its window open (minimised is fine).
+- `Install-AutoStart.cmd` adds a shortcut to your Windows Startup folder, so the watcher
+  starts when you sign in. No administrator rights are needed. `Remove-AutoStart.cmd`
+  takes the shortcut away again.
+
+The watcher only reads the list of running programs. It looks for `iRacingSim64DX11`
+(iRacing) and `Le Mans Ultimate` (LMU). `Start-Recorders.cmd -SelfTest` checks it on
+your PC with a stand-in program.
+
 ## Le Mans Ultimate lap recorder
 
 Le Mans Ultimate closes its own telemetry file when the session ends. To see laps
@@ -134,6 +157,19 @@ Good to know:
   the game's plugin kit. The kit's header file is not part of this repository. A game
   update that changes the layout will need the recorder updated.
 - Not yet tried against the game itself: see "Known limits".
+
+## Tabs appear when they have something to show
+
+- **Library** is always there.
+- **Lap comparison, Track map, Telemetry tables, Driving technique** appear once a
+  session is open.
+- **Setup advice** appears when the open session has a setup. A run without one (for
+  example an LMU lap-recorder run saved while the game did not answer) does not show it.
+- **Baseline setup** and **Setups and differences** appear once at least one setup is
+  known, from a recording or a setup file.
+
+If the tab you were on is no longer there, the app moves to Lap comparison, or to the
+Library when no session is open.
 
 ## Sessions in recorded order
 

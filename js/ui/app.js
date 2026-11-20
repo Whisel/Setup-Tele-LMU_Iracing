@@ -509,9 +509,24 @@
     if (tracks.size > 1) bar.appendChild(h('div', { class: 'lapwarn', text: 'These laps are from different tracks, so the comparison is not meaningful.' }));
   }
 
+  /* Only the tabs that have something to show:
+       Library                                   always
+       Lap comparison, Track map, Telemetry
+       tables, Driving technique                 once a session is open
+       Setup advice                              when that session has a setup
+       Baseline setup, Setups and differences    when at least one setup is known */
+  function visibleTabs() {
+    const s = active(), haveSetups = state.setups.length > 0;
+    const show = { library: true, compare: !!s, map: !!s, tables: !!s, technique: !!s, advice: !!(s && s.setup), baseline: haveSetups, setups: haveSetups };
+    return TABS.filter(([id]) => show[id]);
+  }
+
   function renderTabs() {
     const nav = $('tabs'); nav.innerHTML = '';
-    for (const [id, label] of TABS) {
+    const tabs = visibleTabs();
+    // The open tab has gone (the session was closed, or this one has no setup): fall back to one that is there.
+    if (!tabs.some(([id]) => id === state.tab)) state.tab = active() && tabs.some(([id]) => id === 'compare') ? 'compare' : 'library';
+    for (const [id, label] of tabs) {
       nav.appendChild(h('button', { class: 'tab' + (state.tab === id ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': state.tab === id ? 'true' : 'false', text: label,
         onclick: () => { state.tab = id; renderTabs(); STA.views.render(); saveResume(); } }));
     }

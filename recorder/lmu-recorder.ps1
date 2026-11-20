@@ -425,7 +425,7 @@ namespace StaLmu
         private void Loop()
         {
             System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
-            double next = 0, step = 1000.0 / hz, retryAt = 0;
+            double next = 0, step = 1000.0 / hz, retryAt = 0, seenET = double.NaN, seenAt = 0, checkAt = 0;
             while (!stop)
             {
                 Frame f = null;
@@ -438,6 +438,18 @@ namespace StaLmu
                         catch (FileNotFoundException) { mem = null; }
                     }
                     if (mem != null) f = mem.Read();
+                    // The game's memory stays readable after the game has closed, frozen at its last moment.
+                    // When the clock has stood still for five seconds, look whether the game is still there.
+                    if (f != null && (image == null || image.Length == 0))
+                    {
+                        double now = sw.Elapsed.TotalMilliseconds;
+                        if (f.ET != seenET) { seenET = f.ET; seenAt = now; }
+                        else if (now - seenAt > 5000 && now >= checkAt)
+                        {
+                            checkAt = now + 2000;
+                            if (!GameRunning()) { mem.Dispose(); mem = null; f = null; retryAt = now + 2000; seenET = double.NaN; }
+                        }
+                    }
                 }
                 catch (Exception e)
                 {
@@ -450,6 +462,12 @@ namespace StaLmu
                 if (wait < -500) next = sw.Elapsed.TotalMilliseconds;   // fell behind (PC asleep): start the rhythm again
                 else if (wait > 0) Thread.Sleep((int)Math.Ceiling(wait));
             }
+        }
+
+        private static bool GameRunning()
+        {
+            try { return System.Diagnostics.Process.GetProcessesByName("Le Mans Ultimate").Length > 0; }
+            catch (Exception) { return true; }      // cannot tell: assume it is
         }
 
         /* connected, driving, inPits, recording, samples, laps, runReady, track, car */
