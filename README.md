@@ -139,9 +139,13 @@ What happens then:
 - **When the game reports the car in the pits** (pit lane, garage, or back at the
   menus) the run is finished: its laps are written to a `.lmulaps` file and the app
   opens it a moment later. A run with no whole lap is dropped.
-- The setup on the car is asked from the game's own local web service
-  (`/rest/garage/getPlayerGarageData`, read only) when the run is saved, so setup advice
-  works. If the game does not answer, the run is saved without it and the app says so.
+- The setup on the car is asked from the game's own local web service (read only), once
+  when the run starts and again when it is saved. Two of the game's pages carry it
+  (`/rest/garage/getPlayerGarageData` and `/rest/garage/UIScreen/CarSetupOverview`) and
+  both are tried. If neither gives it, the run is saved without the setup, the recorder
+  window says why ("did not answer", "answered with an error", "answered, but without
+  setup values"), and the app shows the same reason next to the run. Setup advice is
+  hidden for a run without a setup.
 - "Save laps now" in the app saves the laps so far without waiting for the pits.
 - These runs also carry the car's own forward and sideways velocity and yaw rate,
   which the game's `.duckdb` file does not, so **oversteer is measured** for them the

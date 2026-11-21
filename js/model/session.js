@@ -113,7 +113,7 @@
     const setup = info.CarSetup ? STA.setup.fromIracing(info.CarSetup, {
       car: meta.car, carClass: meta.carClass, track: trackName(meta), name: cleanSetupName(meta.setupName) || runName(meta.recordedAt),
     }) : null;
-    return finalize({ meta, hz, n, ch, marks, breaks, setup, warnings: [] });
+    return finalize({ meta, hz, n, ch, marks, breaks, setup, warnings: setup ? [] : ['This recording holds no setup, so the Setup advice tab is hidden for it.'] });
   }
 
   /* Name for a setup that only exists inside a telemetry file. */
@@ -212,7 +212,8 @@
       } catch (e) { /* setup stays null; reported below */ }
     }
     const warnings = (lmu.warnings || []).slice();
-    if (mt.CarSetup && !setup) warnings.push('The setup stored in this recording could not be read.');
+    if (mt.CarSetup && !setup) warnings.push('The setup stored in this recording could not be read, so the Setup advice tab is hidden for it.');
+    if (!mt.CarSetup && !mt.Live) warnings.push('This recording holds no setup, so the Setup advice tab is hidden for it.');
     return finalize({ meta, hz, n, ch, marks, breaks, setup, warnings, lmuSmoothGps: !mt.Live });
   }
 
