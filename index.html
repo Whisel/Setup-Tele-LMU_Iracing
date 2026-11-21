@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setup and Telemetry for iRacing and Le Mans Ultimate</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">Setup and Telemetry</span>
+    <span class="brand-sub">iRacing and Le Mans Ultimate</span>
+  </div>
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Views"></nav>
+  <div class="top-tools">
+    <label class="mini"><span class="mini-text">Speed in</span>
+      <select id="unit-speed" aria-label="Speed unit"><option value="kmh">km/h</option><option value="mph">mph</option></select>
+    </label>
+    <button class="btn ghost" id="theme-toggle" type="button">Light theme</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="rail" aria-label="Sessions and laps">
+    <section class="drop" id="drop">
+      <p class="drop-title">Add telemetry or setup files</p>
+      <p class="drop-help">Add your telemetry folder once and open runs from the Library, or drop single files here: <code>.ibt</code>, <code>.duckdb</code>, <code>.lmulaps</code>, <code>.svm</code>.</p>
+      <div class="drop-actions">
+        <button class="btn" id="pick-folder" type="button" title="The app remembers the folder, sorts its recordings by sim, car and track, and finds new ones by itself">Add a telemetry folder</button>
+        <button class="btn ghost" id="pick-files" type="button">Choose files</button>
+      </div>
+      <input type="file" id="file-input" multiple hidden accept=".ibt,.duckdb,.lmulaps,.svm,.json">
+      <input type="file" id="folder-input" webkitdirectory multiple hidden>
+    </section>
+    <section class="recorder" id="recorder" aria-label="iRacing recorder" aria-live="polite"></section>
+    <div id="busy" class="busy" hidden></div>
+    <div id="messages" class="messages" aria-live="polite"></div>
+    <section class="rail-block">
+      <h2>Sessions</h2>
+      <div id="session-list" class="session-list"></div>
+    </section>
+    <section class="rail-block grow">
+      <h2>Laps <span id="laps-of" class="h-note"></span></h2>
+      <div id="lap-list" class="lap-list"></div>
+    </section>
+  </aside>
+
+  <main>
+    <section class="lapbar" id="lapbar" aria-label="Laps being compared"></section>
+    <div id="view" class="view"></div>
+  </main>
+</div>
+
+<script src="js/core/util.js"></script>
+<script src="js/io/yaml-lite.js"></script>
+<script src="js/io/ibt.js"></script>
+<script src="js/io/lmu.js"></script>
+<script src="js/io/lmulive.js"></script>
+<script src="js/io/recorder.js"></script>
+<script src="js/data/car-limits.js"></script>
+<script src="js/model/setup.js"></script>
+<script src="js/model/session.js"></script>
+<script src="js/analysis/handling.js"></script>
+<script src="js/analysis/pace.js"></script>
+<script src="js/analysis/advisor.js"></script>
+<script src="js/analysis/technique.js"></script>
+<script src="js/analysis/learning.js"></script>
+<script src="js/analysis/baseline.js"></script>
+<script src="js/store/library.js"></script>
+<script src="js/store/folders.js"></script>
+<script src="js/ui/duck.js"></script>
+<script src="js/ui/charts.js"></script>
+<script src="js/ui/app.js"></script>
+<script src="js/ui/views.js"></script>
+<script>STA.app.start();</script>
+</body>
+</html>

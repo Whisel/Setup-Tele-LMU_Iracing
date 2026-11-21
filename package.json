@@ -1,0 +1,9 @@
+{
+  "name": "setup-tele-lmu-iracing",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser app that reads iRacing and Le Mans Ultimate telemetry, compares laps and suggests setup changes.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
