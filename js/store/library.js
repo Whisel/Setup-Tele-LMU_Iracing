@@ -133,7 +133,7 @@
       for (const k of Object.keys(data.blocked)) {
         if (!Array.isArray(data.blocked[k])) continue;
         const have = new Set((blockedAll()[k] || []).map((e) => JSON.stringify(e)));
-        blockedAll()[k] = (blockedAll()[k] || []).concat(data.blocked[k].filter((e) => (typeof e === 'string' || isLimit(e) || isContest(e)) && !have.has(JSON.stringify(e))));
+        blockedAll()[k] = (blockedAll()[k] || []).concat(data.blocked[k].filter((e) => (typeof e === 'string' || isLimit(e) || isContest(e) || isWindow(e)) && !have.has(JSON.stringify(e))));
       }
       blockedSave();
     }
@@ -237,9 +237,21 @@
     remove: (sim, car, paramId, dir, whenNum) => put(sim, car, entries(sim, car).filter((x) => !(isLimit(x) && sameLimit(x, { paramId, dir, when: whenNum == null ? null : { num: whenNum } })))),
   };
 
+  // { tyreWindow: { lo, hi }, at }: the tyre temperature window the driver set for the car.
+  const isWindow = (e) => e && typeof e === 'object' && e.tyreWindow && typeof e.tyreWindow === 'object';
+  const tyreWindow = {
+    get: (sim, car) => { const e = entries(sim, car).find(isWindow); return e ? { lo: e.tyreWindow.lo, hi: e.tyreWindow.hi, at: e.at } : null; },
+    set: (sim, car, lo, hi) => {
+      lo = +lo; hi = +hi;
+      if (!(lo > 0 && hi > lo && hi < 250)) return false;
+      put(sim, car, entries(sim, car).filter((x) => !isWindow(x)).concat({ tyreWindow: { lo, hi }, at: Date.now() })); return true;
+    },
+    clear: (sim, car) => put(sim, car, entries(sim, car).filter((x) => !isWindow(x))),
+  };
+
   const sameCar = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
   const sameTrack = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
 
-  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked, limits, contested, reasons, feel, raw: open,
+  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked, limits, contested, reasons, feel, tyreWindow, raw: open,
     get persistent() { return backend ? backend.persistent : null; } };
 })(typeof window !== 'undefined' ? window : globalThis);

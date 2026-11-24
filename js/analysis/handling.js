@@ -296,24 +296,34 @@
 
     /* ---------- tyres ---------- */
     if (ch.tyreTempI && ch.tyreTempM && ch.tyreTempO) {
+      /* LMU's tyre temperatures move slowly and sit close to the carcass, so they are averaged
+         over the laps. iRacing's surface temperatures swing too much for the camber and pressure
+         rules of thumb, which are written for carcass readings: those come from the readings
+         iRacing takes in the pits after the run (see tyres.js). */
+      const info = STA.tyres ? STA.tyres.analyse(session, out.laps) : null;
+      out.tyreTemps = info;
       const live = session.meta.sim === 'lmu';
+      const reading = !live && session.meta.tyreLive ? (info && info.reading) || null : null;
+      const skip = !live && session.meta.tyreLive && !reading;
       const val = (name, w) => {
-        if (!live) { // iRacing: readings only refresh in the pits; use the last value in the file
+        if (reading) { const r = reading.rows[w]; return name === 'tyreTempI' ? r.inner : name === 'tyreTempM' ? r.mid : name === 'tyreTempO' ? r.outer : NaN; }
+        if (!live) { // readings only refresh in the pits; use the last value in the file
           const a = ch[name][w]; return a[a.length - 1];
         }
         let s = 0, n = 0;
         for (const g of grids) { const a = g[name][w]; for (let i = 0; i < g.n; i += 4) { if (a[i] === a[i]) { s += a[i]; n++; } } }
         return n ? s / n : NaN;
       };
-      const rows = STA.WHEELS.map((name, w) => {
+      if (skip) out.notes.push('iRacing took no tyre readings in the pits after these laps, so camber and pressure advice from tyre temperatures is left out. Stop in your pit box after a run to get them.');
+      const rows = skip ? null : STA.WHEELS.map((name, w) => {
         const inner = val('tyreTempI', w), mid = val('tyreTempM', w), outer = val('tyreTempO', w);
-        const press = ch.tyrePress ? val('tyrePress', w) : null;
+        const press = ch.tyrePress ? (reading ? ch.tyrePress[w][Math.max(0, reading.i - 1)] : val('tyrePress', w)) : null;
         return { wheel: name, inner, mid, outer, avg: (inner + mid + outer) / 3, spread: inner - outer, crown: mid - (inner + outer) / 2, press };
       });
-      const warm = rows.every((r) => r.avg > 40);
-      out.tyres = { rows, live, warm, note: live ? 'Surface temperatures averaged over the analysed laps.' : session.meta.tyreNote };
-      if (warm) {
-        const tConf = live ? baseConf : 'low';
+      const warm = !skip && rows.every((r) => r.avg > 40);
+      if (!skip) out.tyres = { rows, live, warm, reading: !!reading, note: live ? 'Tyre temperatures averaged over the analysed laps.' : reading ? 'Carcass temperatures iRacing took in the pits after lap ' + reading.afterLap + '.' : session.meta.tyreNote };
+      if (skip) { /* nothing more from the tyres here */ } else if (warm) {
+        const tConf = live ? baseConf : reading ? 'medium' : 'low';
         for (const [axle, a, b] of [['front', 0, 1], ['rear', 2, 3]]) {
           const spread = (rows[a].spread + rows[b].spread) / 2, crown = (rows[a].crown + rows[b].crown) / 2;
           if (spread > 16) out.findings.push({ id: 'camber-much-' + axle, kind: 'camberTooMuch', axle, area: 'Tyres', title: 'Too much negative camber, ' + axle,
@@ -336,6 +346,7 @@
           }
         }
       } else out.notes.push('Tyres were not up to temperature in these laps, so tyre-based advice is left out.');
+      if (info) for (const f of STA.tyres.findings(info)) out.findings.push(f);
     }
 
     /* ---------- ride height ---------- */

@@ -49,7 +49,7 @@
     'understeer|entry': 'entry understeer', 'understeer|mid': 'mid-corner understeer', 'understeer|exit': 'exit understeer',
     'oversteer|entry': 'entry oversteer', 'oversteer|mid': 'mid-corner oversteer', 'oversteer|exit': 'exit oversteer',
     frontLock: 'front locking', rearLock: 'rear locking', wheelspin: 'wheelspin', traction: 'exit traction', bottoming: 'bottoming',
-    camberTooMuch: 'too much camber', camberTooLittle: 'too little camber', pressureHigh: 'high tyre pressure', pressureLow: 'low tyre pressure',
+    camberTooMuch: 'too much camber', camberTooLittle: 'too little camber', pressureHigh: 'high tyre pressure', pressureLow: 'low tyre pressure', tyreCold: 'cold tyres', tyreHot: 'hot tyres',
     brakeHot: 'brake temperature', limiter: 'hitting the limiter', lap: 'lap time', pace: 'lap time',
   };
   const targetText = (k) => TARGET_TEXT[k] || k;

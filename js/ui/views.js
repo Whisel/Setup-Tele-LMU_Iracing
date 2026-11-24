@@ -104,6 +104,17 @@
       const thr = css('--thr'), brk = css('--brk'), coast = css('--muted');
       lines[0].colors = Array.from(g.throttle, (v, i) => (v !== v ? 'transparent' : g.brake[i] > 0.05 ? brk : v > 0.2 ? thr : coast));
       legend.push({ swatches: [[thr, 'On throttle'], [brk, 'Braking'], [coast, 'Coasting']], label: 'Lap ' + R + ' pedals' });
+    } else if (mode === 'tyres') {
+      const s = p.a.session, tm = STA.tyres.modeOf(s), win = STA.tyres.windowFor(s.meta.sim, s.meta.car);
+      const which = ui().tyreWheel == null ? 'hot' : ui().tyreWheel;
+      const lm = STA.tyres.lapMap(g, which, tm, win), cols = tyreColours();
+      lines[0].colors = Array.from(lm.cls, (k, i) => (g.speed[i] !== g.speed[i] ? 'transparent' : cols[k + 2]));
+      const who = which === 'hot' ? 'hottest tyre' : STA.tyres.WHEEL_TEXT[STA.WHEELS[which]] + ' tyre';
+      const st = tm === 'window' ? STA.tyres.WIN_STEPS : STA.tyres.REL_STEPS;
+      legend.push({ swatches: tm === 'window'
+        ? [[cols[0], st[1] + '+ °C under'], [cols[1], 'Under'], [cols[2], 'In the window, ' + win.lo + '–' + win.hi + ' °C'], [cols[3], 'Over'], [cols[4], st[1] + '+ °C over']]
+        : [[cols[0], st[1] + '+ °C cooler'], [cols[1], st[0] + '–' + st[1] + ' °C cooler'], [cols[2], 'Within ' + st[0] + ' °C of its lap average'], [cols[3], st[0] + '–' + st[1] + ' °C hotter'], [cols[4], st[1] + '+ °C hotter']],
+        label: 'Lap ' + R + ', ' + who + (tm === 'window' ? ' against its window' : ' against its own lap average') });
     } else if (mode === 'gain' && p.b) {
       // Where each of the two laps gains: slope of the time difference over the surrounding 80 m.
       const ca = css(p.a.colorVar), cb = css(p.b.colorVar), even = css('--muted'), w = Math.round(40 / g.step), d = p.delta;
@@ -115,6 +126,12 @@
       legend.push({ swatches: named.map((l) => [css(l.colorVar), 'Lap ' + l.letter]).concat(grey ? [[css('--lap-x'), grey + ' more in grey']] : []), label: 'Driven lines' });
     }
     return { lines, corners: p.corners.map((c) => ({ name: c.name, i: c.apex })), legend };
+  }
+
+  /* Diverging colours for tyre temperature: two blues (cold side), a neutral grey, two reds
+     (hot side). Checked for colour-blind separation against the track ribbon in each theme. */
+  function tyreColours() {
+    return document.documentElement.dataset.theme === 'dark' ? ['#b7d3f6', '#3987e5', '#66655f', '#ec6a52', '#fbd2c8'] : ['#104281', '#5598e7', '#c4c2ba', '#e34948', '#8f1d1d'];
   }
 
   function legendEl(legend) {
@@ -209,18 +226,26 @@
     if (ui().mapView === '3d') return renderMap3d(p);
     const mode = ui().mapMode || 'speed';
     const mapBox = h('div', { class: 'mapbox big' }), readout = h('div', { class: 'readout' });
-    const md = mapData(p, mode === 'gain' && !p.b ? 'lines' : mode);
+    const tm = STA.tyres.modeOf(p.a.session), useMode = (mode === 'gain' && !p.b) || (mode === 'tyres' && !tm) ? 'lines' : mode;
+    const md = mapData(p, useMode);
     const modes = [['speed', 'Speed on lap ' + R], ['pedals', 'Throttle and brake on lap ' + R], ['gain', p.b ? 'Where laps ' + R + ' and ' + p.b.letter + ' gain time' : 'Where each lap gains time'],
-      ['lines', p.laps.length > 2 ? 'All ' + p.laps.length + ' driven lines' : 'Driven lines']];
-    const sel = h('select', { onchange: (ev) => { ui().mapMode = ev.target.value; render(); } }, modes.map(([v, t]) => h('option', { value: v, selected: v === mode, disabled: v === 'gain' && !p.b, text: t })));
+      ['lines', p.laps.length > 2 ? 'All ' + p.laps.length + ' driven lines' : 'Driven lines']].concat(tm ? [['tyres', 'Tyre temperature on lap ' + R]] : []);
+    const sel = h('select', { onchange: (ev) => { ui().mapMode = ev.target.value; render(); } }, modes.map(([v, t]) => h('option', { value: v, selected: v === useMode, disabled: v === 'gain' && !p.b, text: t })));
+    const wheelSel = useMode === 'tyres' ? h('label', { class: 'mini' }, ['Tyre ', h('select', { onchange: (ev) => { ui().tyreWheel = ev.target.value === 'hot' ? 'hot' : +ev.target.value; render(); } },
+      [['hot', 'Hottest at each point']].concat(STA.WHEELS.map((w, i) => [i, STA.tyres.WHEEL_TEXT[w].replace(/^./, (c) => c.toUpperCase())])).map(([v, t]) => h('option', { value: v, selected: String(v) === String(ui().tyreWheel == null ? 'hot' : ui().tyreWheel), text: t })))]) : null;
+    const tw = STA.tyres.windowFor(p.a.session.meta.sim, p.a.session.meta.car);
+    const tyreHint = useMode !== 'tyres' ? null : h('p', { class: 'hint', text: tm === 'window'
+      ? 'Window ' + tw.lo + '–' + tw.hi + ' °C' + (tw.mine ? ', the one you set for this car.' : ', a general guide. Set the window for this car on the Driving technique tab.') + ' Le Mans Ultimate\'s tyre temperatures change slowly, so short spikes do not show.'
+      : 'iRacing\'s surface temperatures read well under the readings it takes in the pits, so each tyre is compared with its own average over the lap: red is where it heats up. Whether the tyres sit in their window is on the Driving technique tab.' });
     let map = null;
     view().appendChild(h('section', { class: 'panel map-full' }, [
       h('div', { class: 'panel-head' }, [h('h2', { text: p.a.session.trackName }),
-        h('div', { class: 'tools' }, [mapViewSwitch('2d'), h('label', { class: 'mini' }, ['Colour the line by ', sel]), h('button', { class: 'btn ghost', type: 'button', text: 'Reset view', onclick: () => map && map.resetView() })])]),
-      h('div', { class: 'map-split' }, [mapBox, h('div', { class: 'map-side' }, [legendEl(md.legend), readout,
+        h('div', { class: 'tools' }, [mapViewSwitch('2d'), h('label', { class: 'mini' }, ['Colour the line by ', sel]), wheelSel, h('button', { class: 'btn ghost', type: 'button', text: 'Reset view', onclick: () => map && map.resetView() })])]),
+      h('div', { class: 'map-split' }, [mapBox, h('div', { class: 'map-side' }, [legendEl(md.legend), tyreHint, readout,
         h('p', { class: 'hint', text: 'Scroll to zoom, drag to move, double-click to fit. Move over the line to read the values at that point.' })])]),
     ]));
     const cols = p.laps.slice(0, 6); // the readout stays readable up to six laps
+    const tyreCache = new Map(), tyreAt = (l, w) => { const k = l.slot + '|' + w; if (!tyreCache.has(k)) tyreCache.set(k, l.grid.tyreTempM ? STA.tyres.surface(l.grid, w) : null); return tyreCache.get(k); };
     const showAt = (i) => {
       if (i < 0) { readout.innerHTML = '<p class="empty">Move over the line to read values.</p>'; return; }
       const c = p.corners.find((c) => i >= c.a && i <= c.b);
@@ -232,6 +257,7 @@
       html += row('Brake, %', (l) => U.fmt(at(l, 'brake') * 100, 0));
       if (g.gear) html += row('Gear', (l) => U.fmt(at(l, 'gear'), 0));
       if (g.latG) html += row('Lateral G', (l) => U.fmt(at(l, 'latG'), 2));
+      if (useMode === 'tyres') for (let w = 0; w < 4; w++) html += row(STA.WHEELS[w] + ' tyre, °C', (l) => { const sm = tyreAt(l, w); return sm ? U.fmt(sm[i], 0) : ''; });
       html += row('Lap time so far, s', (l) => U.fmt(g.t[i] + (l.delta ? l.delta[i] : 0), 3));
       if (p.b) html += row('Gap to lap ' + R + ', s', (l) => (l.delta ? U.fmtDelta(l.delta[i]) : ''));
       readout.innerHTML = html + '</tbody></table>' + (p.laps.length > cols.length ? '<p class="hint">Showing the first ' + cols.length + ' of ' + p.laps.length + ' laps.</p>' : '');
@@ -854,6 +880,7 @@
       tech.notes.length ? h('ul', { class: 'notes' }, tech.notes.map((n) => h('li', { text: n }))) : null,
       tech.items.length ? more('measured', 'How these are measured', [h('ul', { class: 'plain' }, tech.items.map((x) => h('li', {}, [h('b', { text: x.title + ': ' }), x.evidence])))]) : null,
     ]));
+    if (an.tyreTemps) view().appendChild(tyrePanel(s, an.tyreTemps));
     const withTips = an.findings.map((f) => ({ f, tips: STA.technique.forFinding(f) })).filter((x) => x.tips.length);
     view().appendChild(h('section', { class: 'panel' }, [
       h('h2', { text: 'Driving around the car' }),
@@ -867,6 +894,90 @@
       })) : h('p', { class: 'empty', text: 'No handling problem found, so nothing to drive around.' }),
     ]));
   }
+
+  /* Tyre temperatures: the window, where each tyre heats up, and how the runs warmed up. */
+  function tyrePanel(s, info) {
+    const T = STA.tyres, sim = s.meta.sim, car = s.meta.car, win = info.win, W = STA.WHEELS;
+    const cap = (t) => String(t).replace(/^./, (c) => c.toUpperCase());
+    const name = (w) => cap(T.WHEEL_TEXT[W[w]]);
+    const again = () => { A().state.analysis.delete(s.id); render(); };
+    const f = ui().tyreForm || (ui().tyreForm = {});
+    const lo = h('input', { type: 'number', class: 'text num-in', min: 20, max: 200, step: 1, value: f.lo != null ? f.lo : win.lo, 'aria-label': 'Lowest working temperature, °C', oninput: (ev) => { f.lo = ev.target.value; } });
+    const hi = h('input', { type: 'number', class: 'text num-in', min: 30, max: 240, step: 1, value: f.hi != null ? f.hi : win.hi, 'aria-label': 'Highest working temperature, °C', oninput: (ev) => { f.hi = ev.target.value; } });
+    const msg = h('span', { class: 'hint' });
+    const form = h('div', { class: 'row-form' }, [h('span', { text: 'Working window for the ' + car + ': ' }), lo, h('span', { text: ' to ' }), hi, h('span', { text: ' °C ' }),
+      h('button', { class: 'btn', type: 'button', text: 'Save window', onclick: () => {
+        if (STA.library.tyreWindow.set(sim, car, lo.value, hi.value)) { ui().tyreForm = {}; again(); } else msg.textContent = 'Enter a lower and a higher temperature, for example 80 and 100.';
+      } }),
+      win.mine ? h('button', { class: 'link', type: 'button', text: 'Use the general guide (' + T.DEFAULT.lo + '–' + T.DEFAULT.hi + ' °C)', onclick: () => { STA.library.tyreWindow.clear(sim, car); ui().tyreForm = {}; again(); } }) : null, msg]);
+    const winText = win.mine ? 'Your window for this car: ' + win.lo + '–' + win.hi + ' °C.'
+      : 'Using a general guide of ' + win.lo + '–' + win.hi + ' °C. The right window depends on the car and compound' + (sim === 'lmu' ? '; Le Mans Ultimate shows the ideal temperature for each compound in the pit menu.' : '.');
+
+    // How the tyres sit against the window
+    let status;
+    if (info.mode === 'window') {
+      status = info.shares ? table([{ key: 'w', label: 'Tyre' }, { key: 'avg', label: 'Average, °C', num: true }, { key: 'b', label: 'Under the window', num: true }, { key: 'i', label: 'In it', num: true }, { key: 'o', label: 'Over it', num: true }],
+        info.shares.map((x, w) => ({ w: name(w), avg: U.fmt(x.avg, 0), b: U.fmt(x.below * 100, 0) + '%', i: U.fmt(x.inside * 100, 0) + '%', o: U.fmt(x.above * 100, 0) + '%' })))
+        : h('p', { class: 'empty', text: 'No complete lap to measure.' });
+    } else if (info.reading) {
+      const word = { cold: 'Under the window', in: 'In the window', hot: 'Over the window' };
+      status = h('div', {}, [h('p', { class: 'hint', text: 'Carcass readings iRacing took in the pits after lap ' + info.reading.afterLap + '. These are the temperatures the window refers to.' }),
+        table([{ key: 'w', label: 'Tyre' }, { key: 'in', label: 'Inner, °C', num: true }, { key: 'mid', label: 'Middle, °C', num: true }, { key: 'out', label: 'Outer, °C', num: true }, { key: 'avg', label: 'Average, °C', num: true }, { key: 'v', label: 'Against the window' }],
+          info.reading.rows.map((x, w) => ({ w: name(w), in: U.fmt(x.inner, 0), mid: U.fmt(x.mid, 0), out: U.fmt(x.outer, 0), avg: U.fmt(x.avg, 0), v: word[info.reading.verdict[w]] })))]);
+    } else status = h('p', { class: 'empty', text: 'iRacing took no tyre readings in the pits after these laps, so the app cannot tell whether they reached the window. Stop in your pit box after a run: iRacing takes the readings there.' });
+
+    // Where each tyre heats up
+    const spots = info.spots.length ? h('div', { class: 'findings compact' }, info.spots.map((x) => h('article', { class: 'finding' }, [
+      h('div', { class: 'finding-head' }, [h('h3', { text: x.corner + ', ' + T.WHEEL_TEXT[x.wheel] + ' tyre' })]),
+      h('p', {}, [info.mode === 'window'
+        ? 'Reaches ' + x.peak.toFixed(0) + ' °C, over the ' + win.hi + ' °C top of the window, mostly ' + (x.phase === 'braking' ? 'under braking' : x.phase === 'exit' ? 'on the way out' : 'in the middle of the corner') + '. '
+        : 'Heats up ' + x.excess.toFixed(0) + ' °C over its lap average (to ' + x.peak.toFixed(0) + ' °C on the surface); in a typical corner it gains ' + Math.max(0, x.typical).toFixed(0) + ' °C. Mostly ' + (x.phase === 'braking' ? 'under braking' : x.phase === 'exit' ? 'on the way out' : 'in the middle of the corner') + '. ',
+      h('span', { class: 'evidence', text: 'Seen on ' + x.laps + ' of ' + x.of + ' laps.' })]),
+      h('p', {}, [h('b', { text: 'Try: ' }), x.tip]),
+      s.ch.x || s.ch.lat ? h('button', { class: 'link', type: 'button', text: 'Show on the map', onclick: () => { ui().mapMode = 'tyres'; ui().mapView = '2d'; ui().tyreWheel = x.w; A().state.tab = 'map'; A().renderAll(); } }) : null,
+    ]))) : h('p', { class: 'empty', text: info.mode === 'window'
+      ? 'No tyre goes over the window in a corner. Le Mans Ultimate\'s tyre temperatures change slowly, so short spikes would not show.'
+      : 'No corner stands out: each tyre heats up about as much in every corner.' });
+
+    // Each run: when the tyres came in
+    // runs too short to say anything are left out, unless there is nothing else
+    const long = info.runs.filter((r) => r.laps.length >= 2 && !(r.warmAt == null && r.short && info.mode !== 'window'));
+    const runs = long.length ? long : info.runs.filter((r) => r.laps.length >= 2);
+    const list = (a) => (a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1]);
+    const runText = (r) => {
+      const first = r.laps[0], n = r.laps.length;
+      const head = 'Run from lap ' + first.num + ' (' + n + ' laps): ';
+      if (r.warmAt == null) {
+        if (info.mode !== 'window' && r.short) return head + 'too few clean laps to tell when the tyres came in.';
+        const w = r.lastWheel, end = r.laps[n - 1].temps[w];
+        return head + (w >= 0 ? 'the ' + T.WHEEL_TEXT[W[w]] + ' never reached ' + (info.mode === 'window' ? 'the window' : 'its working temperature') + ' (' + end.toFixed(0) + ' °C on the last lap).' : 'the tyres never settled.')
+          + (r.coldPushed.length ? ' Lap' + (r.coldPushed.length > 1 ? 's ' : ' ') + list(r.coldPushed.map((x) => x.num)) + (r.coldPushed.length > 1 ? ' were' : ' was') + ' within 3% of your best on those tyres.' : '');
+      }
+      const lap = r.laps[r.warmAt];
+      return head + 'all four came in on lap ' + lap.num + ', the ' + ordinal(r.warmAt + 1) + ' lap of the run' + (r.lastWheel >= 0 ? ' (the ' + T.WHEEL_TEXT[W[r.lastWheel]] + ' was last)' : '') + '.'
+        + (r.coldPushed.length ? ' Lap' + (r.coldPushed.length > 1 ? 's ' : ' ') + list(r.coldPushed.map((x) => x.num)) + (r.coldPushed.length > 1 ? ' were' : ' was') + ' within 3% of your best before then.' : '');
+    };
+    const runTable = (r) => table([{ key: 'l', label: 'Lap' }, { key: 't', label: 'Time', num: true }].concat(W.map((w) => ({ key: w, label: w + ', °C', num: true }))),
+      r.laps.map((x, k) => Object.assign({ l: x.num + (k === r.warmAt ? ' (in)' : ''), t: x.time ? U.fmtLap ? U.fmtLap(x.time) : x.time.toFixed(3) : (x.pit ? 'pit lane' : 'part lap') }, ...W.map((w, i) => ({ [w]: U.fmt(x.temps[i], 0) })))));
+    const warm = h('div', {}, [
+      runs.length ? h('ul', { class: 'plain' }, runs.map((r) => h('li', { text: runText(r) }))) : h('p', { class: 'empty', text: 'No run long enough to see the tyres warm up.' }),
+      runs.length ? more('tyre-runs', 'Tyre temperature lap by lap', runs.map((r) => h('div', {}, [h('p', { class: 'hint', text: 'Run from lap ' + r.laps[0].num + '. Average over the lap while driving' + (info.mode === 'window' ? '.' : '; "in" marks the lap all four reached the temperature they settle at on this run.') }), runTable(r)]))) : null,
+    ]);
+    const rt = info.routine;
+    const routine = h('ol', { class: 'steps' }, rt.steps.map((x) => h('li', {}, [h('b', { text: x.title + '. ' }), x.text])));
+
+    return h('section', { class: 'panel' }, [
+      h('h2', { text: 'Tyre temperatures' }),
+      h('p', { class: 'hint', text: winText + (info.mode === 'window' ? '' : ' iRacing\'s surface temperatures on track read well under its pit readings, so on track each tyre is compared with its own lap.') }),
+      form,
+      h('h3', { class: 'sub', text: 'Against the window' }), status,
+      h('h3', { class: 'sub', text: 'Where the tyres heat up most' }), spots,
+      h('h3', { class: 'sub', text: 'Warming up' }), warm,
+      h('h3', { class: 'sub', text: 'Warm-up routine' }), routine,
+      h('p', { class: 'hint', text: 'The braking advice comes from a back-to-back test in iRacing (simracingcockpit.gg): hard braking into corners raised tyre temperature more than weaving, and stop-and-go did not help. How long a car takes to warm up is from your own runs where the recording shows it.' }),
+    ]);
+  }
+  const ordinal = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th'));
 
   /* ---------- Baseline setup ---------- */
 

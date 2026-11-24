@@ -566,6 +566,62 @@ telemetry is never stored; drop the file again to see its traces. Use **Export l
 and **Import library** in the Setups tab to back the library up or move it to another
 browser or computer.
 
+## Tyre temperatures
+
+**On the track map.** Choose *Tyre temperature* under "Colour the line by", then a tyre or
+*Hottest at each point*. Blue is the cold side, grey is normal, red is the hot side, each in
+two steps. Moving over the line shows all four tyres at that point, for every overlaid lap.
+
+The two sims record tyre temperatures differently, so the colours mean different things:
+
+- **iRacing** records the tread surface (inner, middle, outer) all the way round the lap.
+  It swings hard: 10–30 °C up in a corner and down again on the straight. On the real
+  files checked, the on-track surface average read 20–35 °C under the carcass readings
+  iRacing takes in the pits, so holding it to a window would show every tyre as cold. On
+  the map each tyre is instead compared with its own average over the lap: red is where
+  that tyre heats up. Whether the tyres are in their window comes from the pit readings
+  (below).
+- **Le Mans Ultimate** records temperatures that move slowly and sit within a few degrees
+  of the carcass, so the map compares them with the window directly. They are too smooth
+  to show short spikes.
+
+**On the Driving technique tab**, the *Tyre temperatures* panel has:
+
+- **The working window for the car.** 80–100 °C is a general guide (published windows run
+  from about 80–90 °C for GT3 to 85–105 °C for other iRacing cars). Set the real one per car;
+  in LMU the pit menu shows the ideal temperature for each compound. The window you set is
+  kept with the car's limits and goes into the export.
+- **Against the window.** LMU: each tyre's average over the analysed laps and the share of
+  the lap spent under, in and over the window. iRacing: the carcass readings taken in the
+  pits after the run, per edge, against the window. Stop in your pit box after a run so
+  iRacing takes them; without them the app says it cannot tell.
+- **Where the tyres heat up most.** Corners where one tyre gets much hotter than it does in
+  that tyre's other corners (iRacing), or goes over the window (LMU), seen on at least half
+  of the analysed laps. Each comes with when it happens (braking, mid-corner or on the way
+  out, from where the temperature climbs fastest), a driving tip, and a link that opens the
+  map on that tyre.
+- **Warming up.** For each run (a run starts when the car leaves the pits or is reset):
+  the lap on which all four tyres came in, which tyre was last, and any laps within 3% of
+  your best before then. In LMU "came in" means reached the window; in iRacing it means
+  reached the temperature the tyre settles at on that run, because the surface reading
+  cannot be held to the window. The lap-by-lap averages are under *Tyre temperature lap by
+  lap*.
+- **Warm-up routine.** Built from those runs: brake hard into every corner on the out lap
+  and keep good speed between corners; extra work for whichever axle comes in last; the
+  lap of a run to start pushing from; and how to check the result (pit menu in LMU, pit
+  box readings in iRacing). The braking advice follows a back-to-back iRacing test
+  (simracingcockpit.gg) in which heavy braking warmed the tyres more than weaving and
+  stop-and-go did not help.
+
+If both tyres on an axle sit under or over the window, the setup advice gets a *tyres below
+/ above their window* finding, answered with the brake ducts (hotter brakes pass a little
+heat into the wheel and tyre). It is low confidence with the general window and medium with
+one you set.
+
+The camber and pressure checks (inner versus outer edge, middle versus edges) are written
+for carcass readings. For iRacing they now use the pit readings after the run instead of
+the last value in the file; with no pit reading they are left out rather than guessed.
+
 ## Known limits
 
 - **The LMU lap recorder has not been run against the game.** It was built and tested
@@ -580,9 +636,14 @@ browser or computer.
   file is a few seconds long. Lap splitting, lap times and corner detection on the iRacing
   side are covered by the test suite using recordings generated in iRacing's file layout.
   The LMU side was checked against a real multi-lap LMU recording.
-- **iRacing tyre data.** iRacing only refreshes tyre temperature, pressure and wear when
-  the car is in the pits, so tyre findings for iRacing reflect the end of a run and are
-  always low confidence.
+- **iRacing tyre data.** The surface temperatures change all the way round the lap; the
+  carcass temperatures, pressures and wear only change in the pits. The 20–35 °C gap
+  between the two was measured on one car (FIA F4 at Tsukuba, two runs with pit readings);
+  the other two real files had no pit reading after driving. The relative map colours do
+  not depend on that gap, but the warm-up in iRacing is "settled", not "in the window".
+- **Tyre windows** are a general guide until you set one per car. The hot-spot thresholds
+  (a corner 8 °C hotter than that tyre's typical corner, and at least 12 °C over its lap
+  average) were set from three real iRacing files, not tuned per car.
 - **LMU car names.** LMU's telemetry names the entry (team and number), not the car model,
   so two liveries of the same car look like different cars. A `.svm` file names the car
   differently again. The baseline tab shows same-class setups at the track separately for
@@ -630,7 +691,8 @@ command).
     js/model/setup.js     setups from both sims, roles, differences
     js/data/car-limits.js per-car limits for iRacing, with their sources
     js/analysis/          handling analysis, advice rules, driving technique, what the
-                          driver felt (feel.js), learning from earlier sessions, baseline
+                          driver felt (feel.js), tyre temperatures (tyres.js), learning
+                          from earlier sessions, baseline
     js/io/recorder.js     talks to the iRacing recorder on this PC
     recorder/             the iRacing recorder (PowerShell, Windows), with a built-in self-test
     js/store/folders.js   watched folders, the file index, where you left off

@@ -167,6 +167,10 @@
     ],
     limiter: [o('finalDrive', null, '+', 'Raises the speed at which top gear runs out.', 'Slightly weaker acceleration.')],
     brakeHot: [o('brakeDuct', '@', '-', 'More cooling air to the discs.', 'More drag and cooler tyres.')],
+    // Brake heat soaks into the wheel and tyre, so ducts move tyre temperature a little. Pressure and
+    // camber change it too, but which way depends on the car, so they are left to the driver.
+    tyreCold: [o('brakeDuct', '@', '+', 'Hotter brakes pass a little more heat into the wheel and tyre.', 'Brakes run hotter: keep an eye on their temperature.')],
+    tyreHot: [o('brakeDuct', '@', '-', 'Cooler brakes pass less heat into the wheel and tyre.', 'A little more drag.')],
   };
 
   function ruleFor(f) {

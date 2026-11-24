@@ -326,3 +326,11 @@ table.review .verdict { display: block; margin-bottom: 3px; }
 .plain.ideas .why { margin: 2px 0; }
 .plain.ideas .tags { display: inline-flex; }
 .tag-you { font-size: 12px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--accent, var(--border-strong)); color: var(--ink-2); white-space: nowrap; }
+
+/* Tyre temperatures (Driving technique tab) */
+.row-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 4px; }
+input.text.num-in { min-width: 0; width: 5.5em; font-variant-numeric: tabular-nums; }
+ol.steps { margin: 6px 0 0; padding-left: 22px; }
+ol.steps li { margin: 0 0 8px; max-width: 75ch; line-height: 1.5; }
+.panel h3.sub { margin: 18px 0 6px; font-size: 14px; }
+
