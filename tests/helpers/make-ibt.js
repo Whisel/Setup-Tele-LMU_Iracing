@@ -103,6 +103,7 @@ function makeIbt(run, extra) {
     ['LongAccel', 4, 'm/s^2', (j) => run.longAccel[j]],
     ['Lat', 5, 'deg', (j) => lat0 + (run.y[j] / R) * k],
     ['Lon', 5, 'deg', (j) => lon0 + (run.x[j] / (R * Math.cos(lat0 / k))) * k],
+    ['Alt', 4, 'm', (j) => 150 + ((extra && extra.hill) || 0) * Math.sin((2 * Math.PI * (run.dist[j] % run.length)) / run.length)],
     ['OnPitRoad', 1, '', () => 0],
     ['FuelLevel', 4, 'l', (j) => 60 - run.t[j] * 0.01],
   ];

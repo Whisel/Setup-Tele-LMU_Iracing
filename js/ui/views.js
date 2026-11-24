@@ -206,6 +206,7 @@
     if (!p) return view().appendChild(empty('Track map', 'Load a telemetry file to see the track and the line you drove.'));
     const g = p.a.grid, R = p.a.letter;
     if (!g.x) return view().appendChild(empty('No position data', 'This file does not contain position data, so a track map cannot be drawn.'));
+    if (ui().mapView === '3d') return renderMap3d(p);
     const mode = ui().mapMode || 'speed';
     const mapBox = h('div', { class: 'mapbox big' }), readout = h('div', { class: 'readout' });
     const md = mapData(p, mode === 'gain' && !p.b ? 'lines' : mode);
@@ -215,7 +216,7 @@
     let map = null;
     view().appendChild(h('section', { class: 'panel map-full' }, [
       h('div', { class: 'panel-head' }, [h('h2', { text: p.a.session.trackName }),
-        h('div', { class: 'tools' }, [h('label', { class: 'mini' }, ['Colour the line by ', sel]), h('button', { class: 'btn ghost', type: 'button', text: 'Reset view', onclick: () => map && map.resetView() })])]),
+        h('div', { class: 'tools' }, [mapViewSwitch('2d'), h('label', { class: 'mini' }, ['Colour the line by ', sel]), h('button', { class: 'btn ghost', type: 'button', text: 'Reset view', onclick: () => map && map.resetView() })])]),
       h('div', { class: 'map-split' }, [mapBox, h('div', { class: 'map-side' }, [legendEl(md.legend), readout,
         h('p', { class: 'hint', text: 'Scroll to zoom, drag to move, double-click to fit. Move over the line to read the values at that point.' })])]),
     ]));
@@ -237,6 +238,71 @@
     };
     map = new STA.charts.TrackMap(mapBox, { onCursor: showAt }); live.push(map);
     map.setData(md); showAt(-1);
+  }
+
+  function mapViewSwitch(now) {
+    return h('div', { class: 'seg', role: 'group', 'aria-label': 'Map view' }, [['2d', 'Flat map'], ['3d', '3D']].map(([v, t]) =>
+      h('button', { class: 'seg-btn' + (v === now ? ' on' : ''), type: 'button', 'aria-pressed': v === now ? 'true' : 'false', text: t, onclick: () => { if (v !== now) { ui().mapView = v; render(); } } })));
+  }
+
+  /* The reference lap in 3D: the line with a wall for brake and throttle, and the pedal traces below it. */
+  function renderMap3d(p) {
+    const g = p.a.grid, R = p.a.letter, s = p.a.session, u = ui();
+    const sc = STA.view3d.sceneOf(g), flat = !sc || !sc.z;
+    const box = h('div', { class: 'mapbox big' }), readout = h('div', { class: 'readout' }), traces = h('div', { class: 'traces' });
+    const wallOpts = [[0.6, 'Low'], [1, 'Medium'], [1.6, 'High'], [2.5, 'Very high']];
+    const exagOpts = [[1, 'True to life'], [2, 'Twice'], [4, 'Four times'], [8, 'Eight times']];
+    const wallMul = u.wall3d || 1, exag = flat ? 1 : (u.exag3d || 2);
+    let t3d = null;
+    const wallSel = h('select', { onchange: (ev) => { u.wall3d = +ev.target.value; t3d.setOptions({ wallMul: u.wall3d }); note.textContent = wallNote(); } },
+      wallOpts.map(([v, t]) => h('option', { value: v, selected: v === wallMul, text: t })));
+    const exagSel = h('select', { disabled: flat, title: flat ? 'This recording has no height data' : '', onchange: (ev) => { u.exag3d = +ev.target.value; t3d.setOptions({ exag: u.exag3d }); } },
+      flat ? [h('option', { text: 'Flat (no height data)' })] : exagOpts.map(([v, t]) => h('option', { value: v, selected: v === exag, text: t })));
+    const wallNote = () => 'Full pedal is a wall ' + Math.round(STA.view3d.wallMetres(sc) * (u.wall3d || 1)) + ' m high.';
+    const note = h('p', { class: 'hint', text: sc ? wallNote() : '' });
+    const css = STA.charts.css;
+    const heightText = flat
+      ? (s.meta.sim === 'lmu' && !s.meta.live ? 'Le Mans Ultimate\'s own recording has no height data, so the track is drawn flat. Runs from the LMU lap recorder have it.' : 'This recording has no height data, so the track is drawn flat.')
+      : 'Height from the recording: ' + Math.round(sc.zRange) + ' m from the lowest to the highest point of the lap' + (exag > 1 ? ', shown ' + (exagOpts.find((o) => o[0] === exag) || [0, exag + ' times'])[1].toLowerCase() + ' as steep.' : '.');
+    view().appendChild(h('section', { class: 'panel map-full' }, [
+      h('div', { class: 'panel-head' }, [h('h2', { text: s.trackName + ', lap ' + R + ' in 3D' }),
+        h('div', { class: 'tools' }, [mapViewSwitch('3d'), h('label', { class: 'mini' }, ['Wall height ', wallSel]), h('label', { class: 'mini' }, ['Steepness ', exagSel]),
+          h('button', { class: 'btn ghost', type: 'button', text: 'From above', onclick: () => t3d && t3d.topDown() }),
+          h('button', { class: 'btn ghost', type: 'button', text: 'Reset view', onclick: () => t3d && t3d.resetView() })])]),
+      h('div', { class: 'map-split' }, [box, h('div', { class: 'map-side' }, [
+        legendEl([{ swatches: [[css('--brk'), 'Brake'], [css('--thr'), 'Throttle'], [css('--muted'), 'Neither']], label: 'Lap ' + R + ': wall height is the pedal' }]), note, readout,
+        h('p', { class: 'hint', text: heightText }),
+        h('p', { class: 'hint', text: 'Drag to turn the view, right-drag or Shift-drag to move it, scroll to zoom. Click the line to turn around that point, double-click to start again. With the view selected, the arrow keys turn it and + and − zoom.' })])]),
+    ]));
+    const laps = p.laps.length > 1 ? p.laps.length + ' laps' : 'Lap ' + R;
+    view().appendChild(h('section', { class: 'panel' }, [h('div', { class: 'panel-head' }, [h('h2', { text: laps + ' by lap distance' }), h('span', { class: 'h-note', text: 'Move over the traces to find the same point in 3D.' })]), traces]));
+
+    const cols = p.laps.slice(0, 6);
+    const showAt = (i) => {
+      if (i < 0) { readout.innerHTML = '<p class="empty">Move over the line or the traces to read values.</p>'; return; }
+      const c = p.corners.find((c) => i >= c.a && i <= c.b);
+      const row = (label, f) => '<tr><th>' + label + '</th>' + cols.map((l) => '<td class="num">' + f(l) + '</td>').join('') + '</tr>';
+      const at = (l, name) => { const arr = l.on(name); return arr ? arr[i] : NaN; };
+      let html = '<table class="data kv"><thead><tr><th>' + Math.round(g.d[i]) + ' m' + (c ? ', ' + c.name : '') + '</th>' + cols.map((l) => '<th class="num"><i class="sw" style="background:var(' + l.colorVar + ')"></i>' + l.letter + '</th>').join('') + '</tr></thead><tbody>';
+      html += row('Brake, %', (l) => U.fmt(at(l, 'brake') * 100, 0));
+      html += row('Throttle, %', (l) => U.fmt(at(l, 'throttle') * 100, 0));
+      html += row('Speed, ' + A().speedUnit(), (l) => U.fmt(A().speed(at(l, 'speed')), 1));
+      if (g.gear) html += row('Gear', (l) => U.fmt(at(l, 'gear'), 0));
+      if (g.z && !flat) html += row('Height above lowest point, m', (l) => U.fmt(at(l, 'z') - sc.zMin, 1));
+      readout.innerHTML = html + '</tbody></table>';
+    };
+    let stack = null;
+    t3d = new STA.charts.Track3D(box, { onCursor: (i) => { showAt(i); if (stack) stack.setCursor(i, false); }, onView: (v) => { u.cam3d = { key: s.id + '|' + p.a.lap.idx, v }; } });
+    live.push(t3d);
+    t3d.setOptions({ wallMul, exag });
+    const keep = u.cam3d && u.cam3d.key === s.id + '|' + p.a.lap.idx ? u.cam3d.v : null;
+    t3d.setData({ grid: g, corners: p.corners.map((c) => ({ name: c.name, i: c.apex })), label: 'Lap ' + R + ' at ' + s.trackName }, keep);
+    stack = new STA.charts.TraceStack(traces, { onCursor: (i) => { t3d.setCursor(i, false); showAt(i); } });
+    live.push(stack);
+    const on = { speed: true, throttle: true, brake: true };
+    const saved = u.channels; u.channels = on;
+    try { stack.setData({ x: g.d, panels: tracePanels(p), corners: p.corners }); } finally { u.channels = saved; }
+    showAt(-1);
   }
 
   /* ---------- Telemetry tables ---------- */

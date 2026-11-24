@@ -100,7 +100,7 @@ namespace StaLmu
         public static readonly string[] Cols = new string[] {
             "Ground Speed", "Throttle Pos Unfiltered", "Throttle Pos", "Brake Pos", "Clutch Pos", "Steering Pos", "Engine RPM",
             "G Force Lat", "G Force Long", "G Force Vert", "Pos X", "Pos Y", "Local Vel Forward", "Local Vel Lateral", "Yaw Rate",
-            "Fuel Level", "FrontRideHeight", "RearRideHeight", "Front3rdDeflection", "Rear3rdDeflection", "Gear", "ABS", "TC", "Path Lateral" };
+            "Fuel Level", "FrontRideHeight", "RearRideHeight", "Front3rdDeflection", "Rear3rdDeflection", "Gear", "ABS", "TC", "Path Lateral", "Pos Height" };
         public static readonly string[] WheelCols = new string[] {
             "Wheel Speed", "TyresPressure", "TyresTempLeft", "TyresTempCentre", "TyresTempRight", "TyresCarcassTemp", "Tyres Wear", "Brakes Temp", "RideHeights", "Susp Pos" };
     }
@@ -227,6 +227,7 @@ namespace StaLmu
             v[20] = BitConverter.ToInt32(tel, Layout.TeGear);
             v[21] = tel[Layout.TeAbsActive] != 0 ? 1f : 0f; v[22] = tel[Layout.TeTcActive] != 0 ? 1f : 0f;
             v[23] = pathLateral;
+            v[24] = Clean(D(tel, Layout.TePos + 8));     // the game's up axis: height
             f.V = v;
 
             float[] w = new float[Columns.WheelCols.Length * 4];
@@ -567,6 +568,7 @@ namespace StaLmu
             PutD(te + Layout.TeElapsed, ET); PutI(te + Layout.TeLapNumber, Lap); PutD(te + Layout.TeLapStart, LapStart);
             PutS(te + Layout.TeVehicleName, "Demo GT3 #7"); PutS(te + Layout.TeTrackName, "Demo Speedway");
             PutD(te + Layout.TePos, x); PutD(te + Layout.TePos + 16, z);
+            PutD(te + Layout.TePos + 8, 120 + 6 * Math.Sin(2 * Math.PI * (S % Length) / Length));   // a gentle hill
             double rear = 3.5 * Math.Min(1, v * v * k / 9.6) * Math.PI / 180;      // rear slip angle
             PutD(te + Layout.TeLocalVel, 1.35 * v * k - Math.Tan(rear) * v); PutD(te + Layout.TeLocalVel + 16, -v);
             PutD(te + Layout.TeLocalAccel, v * v * k); PutD(te + Layout.TeLocalAccel + 16, -accel); PutD(te + Layout.TeLocalAccel + 8, 0);
@@ -921,6 +923,9 @@ function Invoke-SelfTest {
       Check 'wheel speed is the car speed in m/s' ([Math]::Abs($run.Data[$cols + 0][200] * 3.6 - $speed[200]) -lt 0.5)
       Check 'tyre temperatures are in Celsius' ([Math]::Abs($run.Data[$cols + 3 * 4][200] - 85) -lt 0.01)
       Check 'tyre wear is in percent' ([Math]::Abs($run.Data[$cols + 6 * 4][200] - 98) -lt 0.01)
+      $hcol = [Array]::IndexOf([StaLmu.Columns]::Cols, 'Pos Height'); $hmin = 1e9; $hmax = -1e9
+      foreach ($v in $run.Data[$hcol]) { if ($v -lt $hmin) { $hmin = $v }; if ($v -gt $hmax) { $hmax = $v } }
+      Check ('the height is read: 114 to 126 m (' + [Math]::Round($hmin, 1) + ' to ' + [Math]::Round($hmax, 1) + ')') ($hmin -gt 113.5 -and $hmax -lt 126.5 -and $hmax - $hmin -gt 11)
       Check 'forward speed is positive, in m/s' ([Math]::Abs($run.Data[12][200] * 3.6 - $speed[200]) -lt 0.5)
       $out = Join-Path $tmp 'run.lmulaps'
       $garage = '{"VM_REAR_WING":{"available":true,"value":5,"stringValue":"P5","minValue":0,"maxValue":10},"VM_A":{"available":true},"VM_B":{"available":true}}'

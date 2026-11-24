@@ -196,6 +196,34 @@ more colours than that cannot be told apart reliably; point at a lap in the bar 
 charts to pick it out in the traces and on the map. The Telemetry tables tab shows the
 reference lap and the next overlaid lap; all laps appear in the Lap comparison tab.
 
+## The track in 3D
+
+On the **Track map** tab, switch **Flat map** to **3D**. The reference lap is drawn as a
+line in space with a wall standing on it: its height is the pedal. Brake is the red part
+from the road up; throttle is the green part stacked on top. A braking peak is a tall red
+fin before a corner, and mid-corner throttle is a green wall that starts at or after the
+apex. It is a different way to look at the lap, not a replay.
+
+- **Moving around.** Drag to turn the view, right-drag or Shift-drag to move it, scroll to
+  zoom. Click the line to turn around that point; double-click or **Reset view** to start
+  again; **From above** looks straight down. With the view selected, the arrow keys turn it
+  and + and − zoom.
+- **Linked to the traces.** The speed, throttle and brake traces of every overlaid lap sit
+  below the view. Moving over either one shows the same point in both, with the values
+  in the panel on the right.
+- **Wall height** sets how tall a full pedal is drawn; **Steepness** exaggerates the hills
+  (twice as steep by default), so small climbs and drops can be seen.
+- **Height data.** iRacing files carry the car's altitude, and runs from the LMU lap
+  recorder carry the game's own height. Le Mans Ultimate's own `.duckdb` recording has
+  none, so those laps are drawn flat and the view says so.
+- **What it is not.** There is no circuit model: the files do not say where the track
+  edges are, so the view shows the line you drove on a plain ground. Perspective also
+  makes near walls look taller than far ones; read exact values from the traces.
+
+It is drawn on the page's ordinary canvas with no 3D library (a full redraw takes about
+4 ms for a 4.7 km lap), so it works from a double-clicked `index.html` like the rest of
+the app.
+
 ## Running it
 
 1. Download or clone this repository.
@@ -573,7 +601,7 @@ command).
     recorder/             the iRacing recorder (PowerShell, Windows), with a built-in self-test
     js/store/folders.js   watched folders, the file index, where you left off
     js/store/library.js   browser-side setup and session library
-    js/ui/                charts, DuckDB loader, app shell and tabs
+    js/ui/                charts, the 3D view (track3d.js), DuckDB loader, app shell and tabs
     vendor/duckdb/        bundled DuckDB browser client (see its README)
     tests/                unit tests and the simulation that feeds them
 

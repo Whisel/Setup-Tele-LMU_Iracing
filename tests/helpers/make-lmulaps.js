@@ -2,7 +2,7 @@
 /* Writes a ".lmulaps" file (the format of recorder/lmu-recorder.ps1) from a simulated run,
    so the app's reader can be tested without PowerShell or the game. */
 const COLS = ['Ground Speed', 'Throttle Pos Unfiltered', 'Throttle Pos', 'Brake Pos', 'Clutch Pos', 'Steering Pos', 'Engine RPM', 'G Force Lat', 'G Force Long', 'G Force Vert',
-  'Pos X', 'Pos Y', 'Local Vel Forward', 'Local Vel Lateral', 'Yaw Rate', 'Fuel Level', 'FrontRideHeight', 'RearRideHeight', 'Front3rdDeflection', 'Rear3rdDeflection', 'Gear', 'ABS', 'TC', 'Path Lateral'];
+  'Pos X', 'Pos Y', 'Local Vel Forward', 'Local Vel Lateral', 'Yaw Rate', 'Fuel Level', 'FrontRideHeight', 'RearRideHeight', 'Front3rdDeflection', 'Rear3rdDeflection', 'Gear', 'ABS', 'TC', 'Path Lateral', 'Pos Height'];
 const WHEEL_COLS = ['Wheel Speed', 'TyresPressure', 'TyresTempLeft', 'TyresTempCentre', 'TyresTempRight', 'TyresCarcassTemp', 'Tyres Wear', 'Brakes Temp', 'RideHeights', 'Susp Pos'];
 
 function makeLmuLaps(run, extra) {
@@ -12,7 +12,7 @@ function makeLmuLaps(run, extra) {
     'Ground Speed': (j) => run.speed[j] * 3.6, 'Throttle Pos Unfiltered': (j) => run.thr[j] * 100, 'Throttle Pos': (j) => run.thr[j] * 100, 'Brake Pos': (j) => run.brk[j] * 100,
     'Steering Pos': (j) => run.steer[j] / 4, 'Engine RPM': (j) => run.rpm[j], 'G Force Lat': (j) => run.latG[j], 'G Force Long': (j) => run.longAccel[j] / G,
     'Pos X': (j) => run.x[j], 'Pos Y': (j) => run.y[j], 'Local Vel Forward': (j) => run.velX[j], 'Local Vel Lateral': (j) => run.velY[j], 'Yaw Rate': (j) => run.yawRate[j],
-    'Fuel Level': (j) => 60 - run.t[j] * 0.01, FrontRideHeight: () => 0.05, RearRideHeight: () => 0.07, Gear: (j) => run.gear[j],
+    'Fuel Level': (j) => 60 - run.t[j] * 0.01, 'Pos Height': (j) => 80 + (extra.hill || 0) * Math.sin((2 * Math.PI * (run.dist[j] % run.length)) / run.length), FrontRideHeight: () => 0.05, RearRideHeight: () => 0.07, Gear: (j) => run.gear[j],
   };
   const wheel = { 'Wheel Speed': (j) => run.speed[j], TyresPressure: () => 165, TyresTempLeft: () => 80, TyresTempCentre: () => 85, TyresTempRight: () => 82, TyresCarcassTemp: () => 78,
     'Tyres Wear': () => 98, 'Brakes Temp': () => 400, RideHeights: () => 0.05, 'Susp Pos': () => 0.07 };

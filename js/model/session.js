@@ -56,7 +56,7 @@
       t, speed: f32(v('Speed')), throttle: f32(v('Throttle')), throttleRaw: f32(v('ThrottleRaw')), brake: f32(v('Brake')), clutch: f32(v('Clutch')),
       steer: scale(v('SteeringWheelAngle'), 180 / Math.PI), gear: f32(v('Gear')), rpm: f32(v('RPM')),
       latG: scale(v('LatAccel'), 1 / G), longG: scale(v('LongAccel'), 1 / G), vertG: scale(v('VertAccel'), 1 / G),
-      yawRate: f32(v('YawRate')), yawNorth: f32(v('YawNorth')), lat: v('Lat'), lon: v('Lon'),
+      yawRate: f32(v('YawRate')), yawNorth: f32(v('YawNorth')), lat: v('Lat'), lon: v('Lon'), alt: f32(v('Alt')),
       velX: f32(v('VelocityX')), velY: f32(v('VelocityY')),
       onPit: f32(v('OnPitRoad')), fuel: f32(v('FuelLevel')), abs: f32(v('BrakeABSactive')), lapNo: f32(v('Lap')),
       wheelSpeed: four('speed'), tyrePress: four('pressure'), tyreTempI: temps('I'), tyreTempM: temps('M'), tyreTempO: temps('O'),
@@ -159,7 +159,7 @@
       velX: c('Local Vel Forward'), velY: c('Local Vel Lateral'), yawRate: c('Yaw Rate'),
     };
     const px = c('Pos X', 1, null, Float64Array), py = c('Pos Y', 1, null, Float64Array);
-    if (px && py) { ch.x = px; ch.y = py; }
+    if (px && py) { ch.x = px; ch.y = py; const pz = c('Pos Height', 1, null, Float64Array); if (pz) ch.z = pz; }
     if (!ch.speed) throw new Error('The recording has no Ground Speed channel.');
 
     // Unwrap the 10 Hz Lap Dist before interpolating, so the reset at the line does not smear.
@@ -227,8 +227,13 @@
 
     // --- position in metres ---
     let haveXY = !!(ch.x && ch.y); // already in metres
+    // Samples taken while the car is driving. iRacing logs latitude, longitude and altitude as zero
+    // in the garage, so those samples must not set the centre of the map or the lowest point.
+    const driving = (i) => ch.speed[i] > 3 && !(ch.lat && ch.lat[i] === 0 && ch.lon && ch.lon[i] === 0);
+    const rangeOf = (a) => { let lo = Infinity, hi = -Infinity; for (let i = 0; i < n; i++) { const v = a[i]; if (v === v && isFinite(v) && driving(i)) { if (v < lo) lo = v; if (v > hi) hi = v; } } return [lo, hi]; };
     if (!haveXY && ch.lat && ch.lon) {
-      const [la0, la1] = U.minMax(ch.lat), [lo0, lo1] = U.minMax(ch.lon);
+      let [la0, la1] = rangeOf(ch.lat), [lo0, lo1] = rangeOf(ch.lon);
+      if (!isFinite(la0)) { [la0, la1] = U.minMax(ch.lat); [lo0, lo1] = U.minMax(ch.lon); }
       const latC = (la0 + la1) / 2, lonC = (lo0 + lo1) / 2, R = 6371000, k = Math.PI / 180;
       let x = new Float64Array(n), y = new Float64Array(n);
       for (let i = 0; i < n; i++) { x[i] = (ch.lon[i] - lonC) * k * R * Math.cos(latC * k); y[i] = (ch.lat[i] - latC) * k * R; }
@@ -244,6 +249,16 @@
       s.warnings.push('No GPS position in this file, so the track map is estimated from heading and speed and will drift.');
     }
     if (!haveXY) s.warnings.push('No position data in this file, so the track map is unavailable.');
+
+    // --- height in metres, used by the 3D view: iRacing's altitude, or the LMU lap recorder's height ---
+    if (haveXY && !ch.z && ch.alt) ch.z = Float64Array.from(ch.alt);
+    delete ch.alt;
+    if (ch.z) {
+      const [lo, hi] = rangeOf(ch.z);
+      // A track never climbs more than about 400 m; anything else is not a height.
+      if (!isFinite(lo) || hi - lo > 1000) delete ch.z;
+      else { for (let i = 0; i < n; i++) ch.z[i] -= lo; s.heightRange = hi - lo; }
+    }
 
     // --- reference accelerations from the path itself, used to sanity-check the logged ones ---
     const dv = new Float32Array(n), latGeo = new Float32Array(n);
@@ -346,7 +361,7 @@
     if (!laps.some((l) => l.complete)) s.warnings.push('No complete lap in this recording. You can still look at the data, but lap comparison and setup advice need at least one full lap.');
   }
 
-  const GRID_SCALARS = ['speed', 'throttle', 'throttleRaw', 'brake', 'steer', 'gear', 'rpm', 'latG', 'longG', 'vertG', 'x', 'y', 'abs', 'tc', 'fuel', 'rideF', 'rideR', 'yawRate', 'clutch', 'velX', 'velY'];
+  const GRID_SCALARS = ['speed', 'throttle', 'throttleRaw', 'brake', 'steer', 'gear', 'rpm', 'latG', 'longG', 'vertG', 'x', 'y', 'abs', 'tc', 'fuel', 'rideF', 'rideR', 'yawRate', 'clutch', 'velX', 'velY', 'z'];
   const GRID_WHEELS = ['wheelSpeed', 'tyrePress', 'tyreTempI', 'tyreTempM', 'tyreTempO', 'tyreCarcass', 'brakeTemp', 'rideH', 'suspPos'];
 
   /* Resample one lap onto a distance grid from 0 to track length.
