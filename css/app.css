@@ -316,3 +316,13 @@ table.review .verdict { display: block; margin-bottom: 3px; }
 .rec-controls:empty { display: none; }
 .recorder .check { font-size: 12.5px; }
 .moved { font-size: 13.5px; }
+
+/* What you felt, and what you want to try */
+.feel-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 18px 28px; }
+.feel-cols h3 { margin: 4px 0 8px; font-size: 14px; }
+.feel-cols .form { margin-top: 10px; }
+.feel-cols .form label:not(.check) { min-width: 120px; }
+.plain.felt li, .plain.ideas li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.plain.ideas .why { margin: 2px 0; }
+.plain.ideas .tags { display: inline-flex; }
+.tag-you { font-size: 12px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--accent, var(--border-strong)); color: var(--ink-2); white-space: nowrap; }

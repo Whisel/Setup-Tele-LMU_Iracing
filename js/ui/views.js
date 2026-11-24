@@ -512,11 +512,14 @@
     const s = A().active();
     if (!s) return view().appendChild(empty('Setup advice', 'Load a telemetry file to get setup changes for the setup that was on the car.'));
     if (!s.refLap) return view().appendChild(empty('No complete lap', 'Setup advice needs at least one complete lap.'));
-    const { an, adv } = A().analysisFor(s), sim = s.meta.sim, car = s.meta.car;
-    const checked = ui().adviceChecked && ui().adviceFor === s.id ? ui().adviceChecked : (ui().adviceFor = s.id, ui().adviceChecked = Object.fromEntries(adv.suggestions.filter((x) => x.primary).slice(0, 2).map((x) => [x.key, true])));
+    const { an: measured, merged: an, notes, adv } = A().analysisFor(s), sim = s.meta.sim, car = s.meta.car;
+    // Ticked to start with: the app's first two, and every idea of yours that it agrees with.
+    const checked = ui().adviceChecked && ui().adviceFor === s.id ? ui().adviceChecked : (ui().adviceFor = s.id, ui().adviceChecked = Object.fromEntries(adv.suggestions.filter((x) => x.primary).slice(0, 2).concat(adv.suggestions.filter((x) => x.yours && x.ideaVerdict === 'good')).map((x) => [x.key, true])));
     const again = () => { ui().contestOpen = null; ui().adviceChecked = null; render(); };
 
-    /* --- the changes, first --- */
+    view().appendChild(feelPanel(s, an, notes, adv));
+
+    /* --- the changes --- */
     const list = h('div', { class: 'suggestions' }), blockedList = STA.library.blocked.list(sim, car);
     if (!s.setup) list.appendChild(h('p', { class: 'empty', text: 'No setup in this file, so only findings are shown.' }));
     else if (!adv.suggestions.length) list.appendChild(h('p', { class: 'empty', text: an.findings.length ? 'No setup change is available for these findings on this car.' : 'No changes suggested. Keep this setup.' }));
@@ -524,6 +527,7 @@
       const tags = [];
       if (x.alternativeTo) tags.push(['warn', 'Instead of: ' + x.alternativeTo.join('; ')]);
       else if (x.insteadOf) tags.push(['warn', 'Instead of: ' + x.insteadOf]);
+      if (x.yours) tags.push(x.ideaVerdict === 'try' ? ['warn', 'Your idea: worth one run'] : ['good', 'Your idea']);
       if (x.learned) tags.push(['good', 'Learned on this car']);
       if (x.rearFirst) tags.push(['warn', 'After the rear is settled: the rear slides on this car']);
       if (x.bigger) tags.push(['warn', 'Bigger step: one was too small last time']);
@@ -605,16 +609,87 @@
     if (learnt) view().appendChild(learnt);
 
     view().appendChild(h('section', { class: 'panel' }, [
-      h('h2', { text: 'What the telemetry shows' }),
+      h('h2', { text: notes.felt.length ? 'What the telemetry shows, and what you felt' : 'What the telemetry shows' }),
       an.findings.length ? h('div', { class: 'findings compact' }, an.findings.map((f) => h('article', { class: 'finding' }, [
-        h('div', { class: 'finding-head' }, [h('h3', { text: f.title }), confTag(f.confidence)]),
+        h('div', { class: 'finding-head' }, [h('h3', { text: f.title }), f.felt ? h('span', { class: 'tag-you', text: 'You felt' }) : f.agreed ? h('span', { class: 'tag-you', text: 'Measured and felt' }) : null, confTag(f.confidence)]),
         h('p', {}, [f.detail + ' ', h('span', { class: 'evidence', text: f.evidence })]),
       ]))) : h('p', { class: 'empty', text: 'Nothing stands out in these laps.' }),
+      an.setAside && an.setAside.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Set aside: you felt otherwise' }),
+        h('ul', { class: 'plain' }, an.setAside.map((f) => h('li', {}, [h('b', { text: f.title + ' (telemetry): ' }), 'you felt ' + lower(f.because.title) + '. Your feel is used.'])))]) : null,
       an.notes.length ? h('ul', { class: 'notes' }, an.notes.map((n) => h('li', { text: n }))) : null,
       balance,
     ]));
 
     if (s.setup) view().appendChild(limitsPanel(s, adv));
+  }
+
+  /* What the driver felt in this run, and the changes they want to try, with the app's verdict on each. */
+  function feelPanel(s, an, notes, adv) {
+    const F = STA.feel, AD = STA.advisor, u = ui(), f = u.feelForm || (u.feelForm = { kind: 'understeer', phase: 'entry', band: 'all', amount: 1, axle: 'front' });
+    const again = () => { u.adviceChecked = null; render(); };
+    const bal = F.BALANCE[f.kind], words = (x) => (x.amount === 2 ? 'a lot' : 'a little');
+    const feltText = (x) => (x.kind === 'good' ? 'Felt good, no complaints' : (F.findingOf(x) || { title: x.kind }).title + (x.kind === 'balanced' ? '' : ', ' + words(x)));
+    const opt = (list, now) => list.map(([v, t]) => h('option', { value: v, selected: String(v) === String(now), text: t }));
+    const pick = (key, label, list, cls) => h('label', { class: cls || '' }, [label, h('select', { onchange: (ev) => { f[key] = ev.target.value; if (key === 'kind') render(); } }, opt(list, f[key]))]);
+    const addFelt = () => {
+      const x = { kind: f.kind };
+      if (bal) { x.phase = f.phase; x.band = f.band; }
+      if (f.kind === 'bottoming') x.axle = f.axle;
+      if (f.kind !== 'balanced' && f.kind !== 'good') x.amount = +f.amount === 2 ? 2 : 1;
+      STA.library.feel.addFelt(s.id, x); again();
+    };
+    const feltList = notes.felt.length ? h('ul', { class: 'plain felt' }, notes.felt.map((x, i) => h('li', {}, [feltText(x) + ' ',
+      h('button', { class: 'link', type: 'button', text: 'Remove', 'aria-label': 'Remove: ' + feltText(x), onclick: () => { STA.library.feel.removeFelt(s.id, i); again(); } })])))
+      : h('p', { class: 'empty', text: 'Nothing noted yet for this run.' });
+    const feltForm = h('div', { class: 'form' }, [
+      pick('kind', 'What', F.KINDS, 'wide'),
+      bal ? pick('phase', 'Where', [['entry', 'Corner entry'], ['mid', 'Mid-corner'], ['exit', 'Corner exit']]) : null,
+      bal ? pick('band', 'Corners', F.BANDS.map(([v, t]) => [v, t.replace(/^./, (c) => c.toUpperCase())])) : null,
+      f.kind === 'bottoming' ? pick('axle', 'Where', [['front', 'Front'], ['rear', 'Rear']]) : null,
+      f.kind !== 'balanced' && f.kind !== 'good' ? pick('amount', 'How much', [[1, 'A little'], [2, 'A lot']]) : null,
+      h('button', { class: 'btn ghost', type: 'button', text: 'Add', onclick: addFelt }),
+    ]);
+
+    // Settings this car has that the app knows how to reason about, one entry per end of the car.
+    const settings = [];
+    if (s.setup) for (const role of Object.keys(AD.ROLE)) for (const axle of AD.ROLE[role].fixedAxle ? [null] : ['front', 'rear', null]) {
+      const ps = STA.setup.byRole(s.setup, role, axle || undefined);
+      if (!ps.length || (axle === null && !AD.ROLE[role].fixedAxle && ps.some((p) => p.axle))) continue;
+      settings.push({ id: role + '|' + (axle || ''), role, axle, label: AD.labelFor(role, axle) });
+    }
+    const g = u.ideaForm || (u.ideaForm = {});
+    if (!settings.some((x) => x.id === g.setting)) g.setting = settings.length ? settings[0].id : '';
+    const cur = settings.find((x) => x.id === g.setting);
+    if (g.dir !== '+' && g.dir !== '-') g.dir = '-';
+    const aims = notes.felt.filter((x) => x.kind !== 'good' && x.kind !== 'balanced').map((x) => [F.feltKey(x), 'For: ' + lower(F.findingOf(x).title)]).concat([['pace', 'For: lap time'], ['none', 'Just trying it']]);
+    if (!aims.some(([v]) => v === g.for)) g.for = aims[0][0];
+    const addIdea = () => { if (!cur) return; STA.library.feel.addIdea(s.id, { role: cur.role, axle: cur.axle, dir: g.dir, for: g.for }); again(); };
+    const VERDICT = { good: ['good', 'Good idea'], try: ['warn', 'Worth one run'], against: ['bad', 'Held back'], impossible: ['bad', 'Not possible'] };
+    const judged = adv.ideas || [];
+    const ideaList = notes.ideas.length ? h('ul', { class: 'plain ideas' }, notes.ideas.map((x, i) => {
+      const j = judged.find((k) => k.idea === x) || judged.find((k) => k.role === x.role && (k.axle || null) === (x.axle || null) && k.dir === x.dir);
+      const t = AD.ROLE[x.role] ? AD.titleFor(x.role, x.dir, x.axle || null) : x.role, v = j ? VERDICT[j.verdict] : null;
+      const aim = x.for === 'pace' ? 'lap time' : x.for === 'none' ? 'just trying it' : (() => { const it = notes.felt.find((y) => F.feltKey(y) === x.for); return it ? lower(F.findingOf(it).title) : 'a feeling no longer noted'; })();
+      return h('li', {}, [
+        h('div', {}, [h('b', { text: t }), h('span', { class: 'evidence', text: ' · for ' + aim + ' ' }), v ? h('span', { class: 'tags' }, [h('span', { class: 'tag ' + v[0], text: v[1] })]) : null]),
+        j ? h('p', { class: 'why', text: j.reasons.join(' ') + (j.instead ? ' Instead: ' + lower(j.instead) + '.' : '') + (j.merged ? ' Number ' + j.merged.rank + ' below.' : '') + (j.alsoApp ? ' The app lists it too (number ' + j.alsoApp.rank + '), marked as working against this.' : '') }) : h('p', { class: 'why', text: s.setup ? 'Not a setting the app can check on this car.' : 'No setup in this file, so it cannot be checked.' }),
+        h('button', { class: 'link', type: 'button', text: 'Remove', 'aria-label': 'Remove idea: ' + t, onclick: () => { STA.library.feel.removeIdea(s.id, i); again(); } }),
+      ]);
+    })) : h('p', { class: 'empty', text: 'No ideas noted for this run.' });
+    const ideaForm = settings.length ? h('div', { class: 'form' }, [
+      h('label', { class: 'wide' }, ['Setting', h('select', { onchange: (ev) => { g.setting = ev.target.value; render(); } }, settings.map((x) => h('option', { value: x.id, selected: x.id === g.setting, text: x.label })))]),
+      cur ? h('label', {}, ['Change', h('select', { onchange: (ev) => { g.dir = ev.target.value; } }, opt([['+', AD.titleFor(cur.role, '+', cur.axle)], ['-', AD.titleFor(cur.role, '-', cur.axle)]], g.dir))]) : null,
+      h('label', {}, ['Why', h('select', { onchange: (ev) => { g.for = ev.target.value; } }, opt(aims, g.for))]),
+      h('button', { class: 'btn ghost', type: 'button', text: 'Add', onclick: addIdea }),
+    ]) : null;
+    return h('section', { class: 'panel' }, [
+      h('h2', { text: 'What you felt, and what you want to try' }),
+      h('p', { class: 'hint', text: 'For this run (' + A().whenText(s.meta.recordedAt) + '). Where your feel and the telemetry disagree, your feel is used. Note it after every run: that is how the app learns which changes worked.' }),
+      h('div', { class: 'feel-cols' }, [
+        h('div', {}, [h('h3', { text: 'How the car felt' }), feltList, feltForm]),
+        h('div', {}, [h('h3', { text: 'Changes you want to try' }), ideaList, s.setup ? ideaForm : h('p', { class: 'hint', text: 'This file has no setup, so ideas cannot be checked.' })]),
+      ]),
+    ]);
   }
 
   /* Changes the driver has contested on this car, each with a way to allow it again. */
@@ -629,7 +704,7 @@
   /* Did the change made before this session do what it was meant to?
      Each change is treated as an experiment: why it was made, what happened, and what the app now thinks. */
   function reviewPanel(s) {
-    const st = A().state, R = STA.library.reasons, rv = STA.learning.review(st.summaries, st.setups, s, R.all());
+    const st = A().state, R = STA.library.reasons, rv = STA.learning.review(st.summaries, st.setups, s, R.all(), STA.library.feel.all());
     const head = h('h2', { text: 'Did the last change work?' });
     if (!rv || rv.first) return null;
     const laps = (b, a) => 'Typical lap ' + U.fmtLap(b.medianLap || b.bestLap) + ' → ' + U.fmtLap(a.medianLap || a.bestLap);
@@ -637,21 +712,20 @@
     const verdict = { helped: 'Helped', none: 'No clear difference', hurt: 'Worse' };
     const again = () => { A().state.analysis.delete(s.id); ui().adviceChecked = null; render(); };
     const rows = rv.changes.map((c) => {
-      const inferred = c.why === 'pace' ? 'App\'s reading: ' + lower(c.purpose) : c.why === 'app' ? 'App\'s reading: ' + c.targets.map((t) => lower(t.title)).join('; ') : 'Not known: what was it for?';
+      const forWhat = c.targets.filter((t) => t.kind !== 'pace').map((t) => lower(t.title)).join('; ');
+      const why = c.yours ? 'Your idea: ' + (c.why === 'pace' ? 'lap time' : c.why === 'none' ? 'just trying it' : forWhat || 'no reason given')
+        : c.why === 'driver' ? 'Your answer: ' + forWhat : c.why === 'pace' ? 'App\'s reading: ' + lower(c.purpose) : c.why === 'app' ? 'App\'s reading: ' + forWhat : c.why === 'none' ? 'Just trying it' : 'No reason on record';
       // Lap time where the change acts comes first; then top speed for wing changes; then the handling problem.
       const got = [];
       if (c.time) got.push(h('b', { text: STA.pace.secs(c.time.net) }), ' where it acts' + (c.time.parts.some((p) => Math.abs(p.d) >= 0.01) ? ': ' + c.time.text : ''));
       if (c.top && Math.abs(A().speed(c.top.d)) >= 0.5) got.push((got.length ? '. ' : '') + 'Top speed ' + (c.top.d > 0 ? '+' : '−') + Math.abs(A().speed(c.top.d)).toFixed(0) + ' ' + A().speedUnit());
       const probs = c.targets.filter((t) => t.kind !== 'pace');
-      if (probs.length) got.push((got.length ? '. ' : '') + probs.map((t) => lower(t.title) + ' ' + t.text).join('; '));
+      if (probs.length) got.push((got.length ? '. ' : '') + probs.map((t) => lower(t.title) + (t.byFeel ? ': ' : ' ') + t.text).join('; '));
       return {
         change: h('span', {}, [c.title, h('span', { class: 'evidence', text: ' ' + c.from + ' → ' + c.to })]),
-        why: h('select', { class: 'mini', 'aria-label': 'What was this change for? ' + c.title, onchange: (ev) => { R.set(rv.after.id, c.key, { target: ev.target.value || null }); again(); } },
-          [h('option', { value: '', selected: !c.note.target, text: inferred })].concat(rv.choices.map((o) => h('option', { value: o.value, selected: c.note.target === o.value, text: o.label })))),
+        why,
         got: got.length ? h('span', {}, got) : '–',
-        verdict: h('span', {}, [h('span', { class: 'verdict ' + c.verdict, text: c.overshot && c.verdict === 'helped' ? 'Helped, too far' : verdict[c.verdict] }),
-          h('select', { class: 'mini', 'aria-label': 'Your own verdict on: ' + c.title, title: 'Overrule the telemetry if you felt otherwise', onchange: (ev) => { R.set(rv.after.id, c.key, { verdict: ev.target.value || null }); again(); } },
-            [['', 'Telemetry\'s call'], ['helped', 'I say: helped'], ['none', 'I say: no difference'], ['hurt', 'I say: worse']].map(([v, t]) => h('option', { value: v, selected: (c.note.verdict || '') === v, text: t })))]),
+        verdict: h('span', { class: 'verdict ' + c.verdict, text: c.overshot && c.verdict === 'helped' ? 'Helped, too far' : verdict[c.verdict] }),
         think: c.rethink,
       };
     });
@@ -666,8 +740,9 @@
         U.fmtLap(rv.pace.lapBefore) + ' → ' + U.fmtLap(rv.pace.lapAfter) + ' (' + STA.pace.secs(rv.pace.lap) + '). ' +
         (STA.pace.ZONES.filter((z) => Math.abs(rv.pace.zones[z]) >= 0.01).sort((a, b) => Math.abs(rv.pace.zones[b]) - Math.abs(rv.pace.zones[a])).map((z) => STA.pace.ZONE_TEXT[z] + ' ' + STA.pace.secs(rv.pace.zones[z])).join(', ') || 'No zone moved by a hundredth') +
         '. Top speed ' + A().speed(rv.pace.top.before).toFixed(0) + ' → ' + A().speed(rv.pace.top.after).toFixed(0) + ' ' + A().speedUnit() + '.']) : null,
-      unknown ? h('p', { class: 'instead', text: unknown + (unknown === 1 ? ' change has' : ' changes have') + ' no reason on record. Say what ' + (unknown === 1 ? 'it was' : 'each was') + ' for under "Why" and the app will judge it against that.' }) : null,
-      rows.length ? table([{ key: 'change', label: 'Changed' }, { key: 'why', label: 'Why' }, { key: 'got', label: 'Lap time and effect' }, { key: 'verdict', label: 'Result' }, { key: 'think', label: 'What the app makes of it' }], rows, { cls: 'review' })
+      unknown ? h('p', { class: 'hint', text: (unknown === 1 ? 'One change has' : unknown + ' changes have') + ' no reason on record, so ' + (unknown === 1 ? 'it is' : 'they are') + ' judged on lap time. Note your ideas with what they are for before a run, and the app judges them against that.' }) : null,
+      rv.feltBefore && !rv.feltAfter ? h('p', { class: 'instead', text: 'You noted how the car felt in the run before. Note how it felt in this run too, and the changes aimed at what you felt are judged by that.' }) : null,
+      rows.length ? table([{ key: 'change', label: 'Changed' }, { key: 'why', label: 'What it was for' }, { key: 'got', label: 'Lap time and effect' }, { key: 'verdict', label: 'Result' }, { key: 'think', label: 'What the app makes of it' }], rows, { cls: 'review' })
         : h('p', { class: 'empty', text: 'Only settings the app does not judge changed (fuel, gearing, cooling).' }),
       rv.bonus.length ? h('ul', { class: 'plain gains' }, rv.bonus.map((b) => h('li', {}, [h('b', { text: 'Unexpected gain: ' }), lower(b.title) + ' ' + b.text + ', with nothing aimed at it. Credited to ' + b.credit.map(titleOf).join('; ') + '. ' +
         (b.credit.length === 1 ? 'Now offered for this problem on this car.' : 'Shared between ' + b.credit.length + ' changes, so it needs a second run to count.')]))) : null,

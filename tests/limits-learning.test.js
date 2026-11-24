@@ -349,7 +349,7 @@ test('when a change misses its target, the app says which part of the reasoning 
   assert.deepStrictEqual([good.verdict, good.cause, good.rethink], ['helped', 'asExpected', 'As expected.']);
 });
 
-test('the driver can say what a change was for, and overrule the telemetry', () => {
+test('answers given per change in earlier versions are still honoured', () => {
   const a = base(), b = moreWing();
   const before = run(a, 0.0, { balance: bal(0.0, -0.20) }), after = run(b, 0.0, { balance: bal(0.0, -0.05) });
   const blind = judged(before, after, a, b);
@@ -358,7 +358,7 @@ test('the driver can say what a change was for, and overrule the telemetry', () 
   // a setting with no pace purpose and no handling reason is still asked about
   const bias = setupFor('Test GT3', (y) => y.replace('BrakePressureBias: 54.0%', 'BrakePressureBias: 55.0%'));
   const asked = judged(before, run(bias, 0.0, { balance: bal(0.0, -0.20) }), a, bias);
-  assert.deepStrictEqual([asked.why, asked.rethink], ['unknown', 'No reason on record: lap unchanged. Say what it was for.']);
+  assert.deepStrictEqual([asked.why, asked.rethink], ['unknown', 'No reason on record: lap unchanged. Next time, note it as your idea with what it is for.']);
   assert.ok(STA.learning.intentChoices(before).some((o) => o.value === 'g:oversteer|entry'));
 
   const told = judged(before, after, a, b, { 'rearWing|rear|+': { target: 'g:oversteer|entry' } });

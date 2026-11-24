@@ -440,6 +440,38 @@ and a slow corner costs time on the straight after it as well as in the corner. 
 loaded before this was added have no pace profile until their file is opened again; they
 are judged on overall lap time as before.
 
+## What you felt, and what you want to try
+
+At the top of the **Setup advice** tab, note for each run:
+
+- **How the car felt**: understeer, oversteer or balanced (corner entry, mid-corner or exit;
+  slow, medium, fast or all corners; a little or a lot), fronts locking, the rear locking or
+  stepping out under braking, wheelspin on exit, bottoming out, or that it felt good.
+- **Changes you want to try**: a setting, which way, and what it is for (one of the things
+  you felt, lap time, or just trying it).
+
+How the advice uses them:
+
+- **Your feel comes first where it disagrees.** If you felt oversteer where the telemetry
+  reads understeer (or the car felt balanced there), the telemetry reading is set aside and
+  listed as such. Where both agree, the problem counts for more. What you felt that the
+  telemetry did not show is added.
+- **Each idea gets a verdict**: *Good idea*, *Worth one run*, *Held back* or *Not possible*,
+  with the reason. It is checked against the rules, the car's limits, the other problems on
+  the car (does it make one of them worse, and does that matter more?) and what happened when
+  it was made on this car before. A held-back idea names the app's own answer instead.
+- **Ideas are ranked with the app's changes.** A sound idea the app also suggests is marked
+  *Your idea*, ticked and moved up; one it does not suggest is added. Where the app wanted the
+  opposite and that change works against what you felt, your idea replaces it. App changes
+  that work against what you felt move down the list.
+- **Learning.** When the next run's setup contains your idea, it is judged against the reason
+  you gave, by what you note after that run. That is why it pays to note how the car felt
+  after every run, including "felt good". Notes are kept per run in this browser and are
+  included in the library export.
+
+What you felt counts a quarter more than a reading only the telemetry made. The app cannot
+check your feel; if a note is wrong, remove it and the advice changes with it.
+
 ## Learning from your sessions
 
 Every session you load leaves a short record in the library: the balance in each corner
@@ -448,12 +480,14 @@ kept. The app uses those records in three ways.
 
 - **Did the last change work?** When the run before this one (same car, same track) used a
   different setup, every changed setting is treated as an experiment and shown as one row:
-  - **Why** it was changed. The app reads this from its rules (the change is a usual answer
-    to something found in the earlier run). If it cannot, it asks: pick what the change was
-    for from the list. You can also correct the app's reading.
-  - **Got**: how that measure moved.
-  - **Result**: helped, no clear difference, or worse. You can overrule it ("I say: helped")
-    when you felt something the numbers do not show; the tally then uses your call.
+  - **What it was for.** Your reason, when you noted the change as your idea (see "What you
+    felt, and what you want to try"); otherwise the app's reading from its rules (the change
+    is a usual answer to something measured or felt in the earlier run). The app no longer
+    asks about each change.
+  - **Got**: how that measure moved. A problem you felt is judged by what you noted after
+    the next run (gone, less, the same, more, or now the other way); that comes before the
+    telemetry. Without a note, the telemetry decides.
+  - **Result**: helped, no clear difference, or worse.
   - **What the app makes of it** when the expectation was missed:
     - right direction but too small (a bigger step is offered next time)
     - this setting does not drive the problem on this car (the next kind of setting is named)
@@ -483,7 +517,7 @@ practice, so one comparison is weak evidence, and when several settings change a
 app cannot tell which one did what. It says so on the page when that applies. What it
 learns is limited to what it can measure: which change moved which problem, in which
 direction, and whether one step was enough. It does not model the car, and it only knows
-why you changed something if the rules explain it or you tell it.
+why you changed something if the rules explain it or you noted it as your idea.
 
 ## How the advice is laid out
 
@@ -595,8 +629,8 @@ command).
     js/model/session.js   laps, distance grids, track map, corners
     js/model/setup.js     setups from both sims, roles, differences
     js/data/car-limits.js per-car limits for iRacing, with their sources
-    js/analysis/          handling analysis, advice rules, driving technique,
-                          learning from earlier sessions, baseline
+    js/analysis/          handling analysis, advice rules, driving technique, what the
+                          driver felt (feel.js), learning from earlier sessions, baseline
     js/io/recorder.js     talks to the iRacing recorder on this PC
     recorder/             the iRacing recorder (PowerShell, Windows), with a built-in self-test
     js/store/folders.js   watched folders, the file index, where you left off

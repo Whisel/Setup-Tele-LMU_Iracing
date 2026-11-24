@@ -174,7 +174,7 @@
       const speed = f.band === 'high' ? 'fast' : 'slow';
       const list = RULES[f.kind + '|' + f.phase + '|' + speed] || [];
       // Medium-speed corners feel both mechanical and aero changes: lead with mechanical, then aero.
-      if (f.band === 'medium') {
+      if (f.band === 'medium' || f.band === 'all') {
         const aero = (RULES[f.kind + '|' + f.phase + '|fast'] || []).filter((x) => x.role === 'rearWing' || x.role === 'frontAero');
         return list.slice(0, 3).concat(aero.slice(0, 1), list.slice(3));
       }
@@ -427,6 +427,7 @@
             if (existing.dir === opt.dir) { existing.reasons.push(f.title); existing.findingIds.push(f.id); existing.score += f.severity * 0.5; standIn(existing); taken++; break; }
             if (existing.fix) continue; // moving it back inside the limit is not optional
             existing.conflict = (existing.conflict || []).concat(f.title);
+            if (f.felt || f.agreed) existing.againstFelt = true;
             continue; // wanted the other way round for another finding: look for a different route
           }
           // One step moved it the right way but not enough last time: offer two.
@@ -450,14 +451,112 @@
     }
     // The wing-level entry is already built from the lap times on record, so its history is not counted twice.
     for (const s of suggestions) if (!s.fix && !(s.findingIds.length === 1 && s.findingIds[0] === 'pace-wing')) applyHistory(s, opts && opts.outcomes);
+    // The driver's own ideas, checked and ranked with the app's.
+    const mine = addIdeas(opts && opts.ideas, analysis.findings, setup, blocked, outs, learned, suggestions, byKey);
     // Limit fixes first, then first-choice fixes, then the alternatives; changes that have not worked on this car go last.
     // Changes that only serve understeer on a car whose rear slides come after everything for the rear.
     const waits = new Set(analysis.findings.filter((f) => f.rearFirst).map((f) => f.id));
     for (const s of suggestions) if (!s.fix && s.findingIds.length && s.findingIds.every((id) => waits.has(id))) s.rearFirst = true;
+    // A change that works against something the driver felt goes below the ones that do not.
+    for (const s of suggestions) if (s.againstFelt && !s.yours && !s.fix) { s.primary = false; s.score *= 0.5; }
     const tier = (s) => (s.fix ? 3 : s.demoted ? 0 : s.rearFirst ? 0.5 : s.primary ? 2 : 1);
     suggestions.sort((a, b) => tier(b) - tier(a) || b.score - a.score);
     suggestions.forEach((s, i) => { s.rank = i + 1; });
-    return { suggestions, skipped, exhausted, violations, car, note: '' };
+    return { suggestions, skipped, exhausted, violations, car, note: '', ideas: mine.judged, heldBack: mine.heldBack };
+  }
+
+  /* ---------- the driver's own ideas ---------- */
+
+  const lowerFirst = (t) => String(t || '').replace(/^./, (c) => c.toLowerCase());
+
+  /* One idea ({ role, axle, dir, for }) checked against what is known:
+       can it be made     the car's limits and what was marked not possible
+       what it is for     the felt problem it was linked to, or lap time, or nothing in particular
+       the rules          does it answer that problem (or this car's own learned answer)?
+       the opposite       is the opposite change the usual answer to a problem on the car? Then it makes it worse.
+       this car           what happened when it was made here before
+     verdict: good | try | against | impossible, with short reasons. */
+  function judgeIdea(idea, findings, setup, guard, outcomes, learned) {
+    if (!idea || !ROLE[idea.role] || (idea.dir !== '+' && idea.dir !== '-')) return null;
+    const axle = idea.axle || null, dir = idea.dir, key = blockKey(idea.role, axle, dir);
+    const r = resolve(setup, idea.role, axle, dir, { blocked: guard && guard.blocked, limits: guard && guard.limits });
+    const out = { idea, key, role: idea.role, axle, dir, title: titleFor(idea.role, dir, axle), aim: null, helps: [], hurts: [], reasons: [], verdict: 'try', params: r.params };
+    if (!r.params.length) { out.verdict = 'impossible'; out.reasons.push(r.why); return out; }
+    const opp = dir === '+' ? '-' : '+', change = { role: idea.role, axle, dir, key }, back = { role: idea.role, axle, dir: opp, key: blockKey(idea.role, axle, opp) };
+    const tk = (f) => STA.learning.targetKey(f);
+    const learnedFor = (c, f) => ((learned && learned.get(tk(f))) || []).some((e) => e.key === c.key);
+    const answers = (c, f) => STA.learning.addresses(c, f) || learnedFor(c, f);
+    out.helps = findings.filter((f) => answers(change, f));
+    out.hurts = findings.filter((f) => !answers(change, f) && answers(back, f));
+    out.aim = idea.for === 'pace' ? 'pace' : STA.feel ? STA.feel.aimOf(idea, findings) : null;
+    const target = out.aim && out.aim !== 'pace' ? out.aim : null, main = target ? [target] : out.helps;
+    const rec = (f) => { const st = outcomes && outcomes.get(key); return st && st.by ? st.by[tk(f)] : null; };
+    const say = (v, text) => { out.verdict = v; out.reasons.unshift(text); return out; };
+
+    // This car's own record comes first.
+    for (const f of main) {
+      const b = rec(f);
+      if (b && b.tried && !b.helped && b.hurt) return say('against', 'Made ' + lowerFirst(f.title) + ' worse on this car before (' + b.hurt + ' of ' + b.tried + (b.tried === 1 ? ' run' : ' runs') + ').');
+      if (b && b.helped) out.reasons.push('Helped with ' + lowerFirst(f.title) + ' on this car before (' + b.helped + ' of ' + b.tried + ').');
+      if (b && b.tried && !b.helped && !b.hurt && b.dead >= 2) out.reasons.push('Had no effect on ' + lowerFirst(f.title) + ' here twice.');
+    }
+    if (target && out.hurts.indexOf(target) >= 0) return say('against', 'Usually makes ' + lowerFirst(target.title) + ' worse: the usual answer is the opposite.');
+    // What the driver felt counts a quarter more than what only the telemetry read; an idea is held back
+    // only when what it makes worse clearly matters more than what it is for.
+    const weight = (f) => f.severity * (f.felt || f.agreed ? 1.25 : 1);
+    const worst = out.hurts.slice().sort((a, b) => weight(b) - weight(a))[0];
+    const best = main.filter((f) => out.helps.indexOf(f) >= 0).sort((a, b) => weight(b) - weight(a))[0];
+    if (worst && (!best || weight(worst) > weight(best) * 1.1)) return say('against', 'Makes ' + lowerFirst(worst.title) + ' worse' + (best ? ', which matters more here than ' + lowerFirst(best.title) : '') + '.');
+    if (worst) out.reasons.push('Also makes ' + lowerFirst(worst.title) + ' worse.');
+    if (out.aim === 'pace') return say('try', 'For lap time: judged on where the lap gains or loses after your next run.');
+    if (target && out.helps.indexOf(target) < 0) return say('try', 'Not one of the app\'s usual answers for ' + lowerFirst(target.title) + '. Worth one run: the app will judge it against that.');
+    if (!main.length) return say('try', 'Answers none of the problems on the car now. Judged on lap time after your next run.');
+    if (worst || out.reasons.some((t) => /^Had no effect/.test(t))) return say('try', 'Answers ' + main.map((f) => lowerFirst(f.title)).join('; ') + '.');
+    return say('good', 'Answers ' + main.map((f) => lowerFirst(f.title)).join('; ') + '.');
+  }
+
+  /* Ideas into the list of changes: a sound idea the app also suggests is marked as yours and moved
+     up; a sound idea it does not suggest is added; the rest are held back with the reason and the
+     app's own answer for the same problem. */
+  function addIdeas(ideas, findings, setup, guard, outcomes, learned, suggestions, byKey) {
+    const judged = [], heldBack = [];
+    for (const idea of ideas || []) {
+      const j = judgeIdea(idea, findings, setup, guard, outcomes, learned);
+      if (!j) continue;
+      judged.push(j);
+      const f0 = j.aim && j.aim !== 'pace' ? j.aim : j.helps[0] || null;
+      const appFor = (f) => suggestions.find((s) => !s.fix && !s.yours && f && s.findingIds.indexOf(f.id) >= 0 && s.blockKey !== j.key);
+      if (j.verdict === 'against' || j.verdict === 'impossible') {
+        const alt = appFor(f0); if (alt) j.instead = alt.title;
+        // The app may suggest the same change for another problem; say so rather than look inconsistent.
+        const also = suggestions.find((s) => s.blockKey === j.key && !s.fix); if (also) j.alsoApp = also;
+        heldBack.push(j); continue;
+      }
+      let same = suggestions.find((s) => s.role === j.role && (s.axle || null) === j.axle && !s.fix);
+      // The app wants the opposite, but its own change works against what the driver felt: the idea replaces it.
+      if (same && same.dir !== j.dir && same.againstFelt) {
+        suggestions.splice(suggestions.indexOf(same), 1); byKey.delete(same.key);
+        j.replaced = same; j.reasons.push('Replaces the app\'s ' + lowerFirst(same.title) + ' (for ' + same.reasons.map(lowerFirst).join('; ') + '), which worked against what you felt.');
+        same = null;
+      }
+      if (same && same.dir !== j.dir) {
+        j.verdict = 'against'; j.reasons.unshift('The app suggests the opposite (' + lowerFirst(same.title) + ') for ' + same.reasons.map(lowerFirst).join('; ') + '.');
+        heldBack.push(j); continue;
+      }
+      if (same) { same.yours = true; same.primary = true; same.score += 0.3; same.ideaVerdict = j.verdict; j.merged = same; continue; }
+      const rule = f0 ? ruleFor(f0).find((o) => o.role === j.role && o.dir === j.dir) : null;
+      const change = buildChange(j.role, j.dir, j.params, 1);
+      const s = {
+        key: j.role + '|' + (j.axle || ''), blockKey: j.key, role: j.role, axle: j.axle, dir: j.dir, title: change.cappedAt != null ? change.text : j.title,
+        amount: change.cappedAt != null ? '' : change.by, targetKey: f0 ? STA.learning.targetKey(f0) : j.aim === 'pace' ? 'pace' : null, learned: 0, bigger: false,
+        paramIds: j.params.map((p) => p.id), current: SU().describe(j.params), change, effect: rule ? rule.effect : 'Your idea.', cost: rule ? rule.cost : '',
+        reasons: [j.aim === 'pace' ? 'Lap time' : f0 ? f0.title : 'Your idea'], findingIds: j.helps.map((f) => f.id), confidence: j.verdict === 'good' ? 'medium' : 'low',
+        primary: j.verdict === 'good', yours: true, ideaVerdict: j.verdict, score: (f0 ? f0.severity : 0.4) * (j.verdict === 'good' ? 1.1 : 0.7),
+      };
+      applyHistory(s, outcomes);
+      byKey.set(s.key, s); suggestions.push(s); j.merged = s;
+    }
+    return { judged, heldBack };
   }
 
   /* Copy of the setup with the chosen suggestions written in. */
@@ -473,5 +572,5 @@
     return SU().refresh(c);
   }
 
-  STA.advisor = { advise, proposeSetup, CONTEST, contestText, ROLE, RULES, buildChange, ruleFor, titleFor, labelFor, equivalents, resolve, blockKey };
+  STA.advisor = { advise, judgeIdea, proposeSetup, CONTEST, contestText, ROLE, RULES, buildChange, ruleFor, titleFor, labelFor, equivalents, resolve, blockKey };
 })(typeof window !== 'undefined' ? window : globalThis);
