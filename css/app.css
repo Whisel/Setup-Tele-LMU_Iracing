@@ -112,9 +112,17 @@ table.laps th { text-align: left; font-weight: 400; color: var(--muted); font-si
 table.laps td { padding: 3px 4px; border-top: 1px solid var(--border); }
 table.laps td.strong { font-size: 14px; }
 table.laps tr.dim td { color: var(--muted); }
-table.laps tr[style] td:first-child { padding-left: 8px; }
+table.laps tr[style] td:first-child { padding-left: 7px; }
 .lap-note { font-size: 11px; color: var(--muted); max-width: 58px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lap-tools { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.lap-tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12.5px; }
+.lap-tools-end { display: flex; gap: 10px; }
+.lap-count select { font-size: 12.5px; padding: 2px 4px; }
+table.laps tbody tr { cursor: pointer; }
+table.laps tbody tr:hover td { background: var(--sunk); }
+table.laps tr.picked td { font-weight: 600; }
+table.laps td.pick { width: 18px; padding-right: 0; }
+table.laps td.pick input { margin: 0; cursor: pointer; }
+table.laps td.lap-letter { width: 14px; font-weight: 700; padding-left: 2px; }
 .link[disabled] { opacity: 0.45; cursor: default; text-decoration: none; }
 .pill { min-width: 26px; height: 22px; border-radius: 4px; border: 1px solid var(--border-strong); background: transparent; cursor: pointer; font-family: var(--font-num); font-weight: 700; color: var(--ink-2); padding: 0 4px; }
 .pill.on { color: #fff; }

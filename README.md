@@ -185,9 +185,17 @@ last change work?", so it is clear which run is which.
 
 ## Overlaying laps
 
-Each lap in the lap list has a **+** button; press it on as many laps as you like, or use
-**Overlay all timed laps**. Every overlaid lap gets a letter and a colour that it keeps
-until you remove it. One lap is the **reference** (the **Ref** button): time differences
+The lap list shows every lap in the file. When a session opens, its **three fastest** laps
+are overlaid (fewer if it has fewer). To change that:
+
+- **Show** picks the fastest 1, 2, 3, 5 or 10, or all of them, in one go. It replaces the
+  laps from this session and leaves laps from other sessions alone. When you have ticked
+  your own mix it reads "your pick".
+- **Tick a lap** (or click anywhere on its row) to add it or take it off.
+- **Fastest first / In lap order** sorts the list. The choice is remembered.
+- **Clear** takes every lap off.
+
+Every overlaid lap gets a letter and a colour that it keeps until you remove it. One lap is the **reference** (the **Ref** button): time differences
 and the corner table are measured against it, and you can change it at any time without
 the other laps changing colour.
 

@@ -15,7 +15,7 @@
        overlay  = [{ sid, lap, slot }]   slot gives the lap its letter and colour and never changes while it is selected
        refSlot  = slot of the reference lap, the one every time difference is measured against */
   const state = {
-    sessions: [], activeId: null, overlay: [], refSlot: null, tab: 'library',
+    sessions: [], activeId: null, overlay: [], refSlot: null, tab: 'library', lapSort: (() => { try { return localStorage.getItem('sta-lap-sort') || 'order'; } catch (e) { return 'order'; } })(),
     lib: { folders: [], entries: [], report: null, busy: false },
     speedUnit: 'kmh', setups: [], summaries: [], analysis: new Map(), tech: new Map(), messages: [], ui: {},
   };
@@ -41,6 +41,22 @@
   }
   function setRef(sid, lap) { addLap(sid, lap); state.refSlot = findEntry(sid, lap).slot; }
   function clearLaps() { state.overlay = []; state.refSlot = null; }
+
+  /* The laps that can be compared, fastest first: timed laps, or any complete lap when none is timed. */
+  function rankedLaps(s) {
+    const timed = s.laps.filter((l) => l.complete && l.valid).sort((a, b) => a.time - b.time);
+    return timed.length ? timed : s.laps.filter((l) => l.complete).sort((a, b) => a.time - b.time);
+  }
+  const DEFAULT_LAPS = 3;
+  /* Overlay the fastest n laps of a session in place of the ones from it shown now. Laps from other
+     sessions stay. The fastest becomes the reference unless the reference is from another session. */
+  function showFastest(s, n) {
+    const keepRef = refEntry() && refEntry().sid !== s.id;
+    for (const e of state.overlay.filter((e) => e.sid === s.id)) removeLap(e.sid, e.lap);
+    const pickd = rankedLaps(s).slice(0, n);
+    for (const l of pickd) addLap(s.id, l.idx);
+    if (!keepRef && pickd.length) setRef(s.id, pickd[0].idx);
+  }
 
   /* Every overlaid lap, resolved, reference first. Keeps enough distance grids cached for all of them. */
   function overlayLaps() {
@@ -400,14 +416,11 @@
     state.activeId = id;
     const s = sessionById(id); if (!s) return;
     // Switching session keeps the overlaid laps, so laps from different sessions can be compared.
+    // A new session starts with its fastest three laps overlaid (or as many as it has).
     if (resetLaps || !pick(state.A)) {
-      const timed = s.laps.filter((l) => l.complete && l.valid).sort((a, b) => a.time - b.time);
-      const any = s.laps.filter((l) => l.complete);
-      const first = timed[0] || any[0] || s.laps[0];
-      const second = timed[1] || any.find((l) => l !== first) || null;
       clearLaps();
-      if (first) addLap(id, first.idx);
-      if (second) addLap(id, second.idx);
+      showFastest(s, DEFAULT_LAPS);
+      if (!state.overlay.length && s.laps[0]) addLap(id, s.laps[0].idx);
     }
   }
 
@@ -451,36 +464,55 @@
     }
   }
 
+  /* The lap list: every lap in the file with a tick box. "Show" picks the fastest few in one go;
+     ticking a lap adds it to or takes it off the overlay. */
   function renderLaps() {
     const box = $('lap-list'), s = active(); box.innerHTML = '';
     $('laps-of').textContent = s ? 'in ' + s.trackName : '';
     if (!s) { box.appendChild(h('p', { class: 'empty', text: 'Laps appear here once a telemetry file is loaded.' })); return; }
     const best = s.bestLap ? s.bestLap.time : null, ref = refEntry();
-    const timed = s.laps.filter((l) => l.complete && l.valid);
+    const ranked = rankedLaps(s), rank = new Map(ranked.map((l, i) => [l.idx, i + 1]));
+    const mine = state.overlay.filter((e) => e.sid === s.id);
+    // Which "fastest n" the current pick matches, if any.
+    const chosen = new Set(mine.map((e) => e.lap));
+    const n = mine.length && mine.length <= ranked.length && ranked.slice(0, mine.length).every((l) => chosen.has(l.idx)) ? mine.length : null;
+    const counts = [1, 2, 3, 5, 10].filter((k) => k < ranked.length).concat(ranked.length ? [ranked.length] : []);
+    const countSel = h('select', { 'aria-label': 'How many of the fastest laps to overlay', disabled: ranked.length ? null : true,
+      onchange: (ev) => { if (ev.target.value) { showFastest(s, +ev.target.value); renderAll(); } } },
+      (n == null ? [h('option', { value: '', selected: true, text: mine.length ? 'your pick (' + mine.length + ')' : 'none' })] : [])
+        .concat(counts.map((k) => h('option', { value: k, selected: k === n, text: k === ranked.length ? 'all ' + k + (ranked.length > 1 ? ' laps' : ' lap') : 'fastest ' + k }))));
+    const sortBy = state.lapSort === 'fast' ? 'fast' : 'order';
+    const sortBtn = h('button', { class: 'link', type: 'button', text: sortBy === 'fast' ? 'In lap order' : 'Fastest first',
+      title: 'Sort the list ' + (sortBy === 'fast' ? 'in the order the laps were driven' : 'by lap time'), onclick: () => { state.lapSort = sortBy === 'fast' ? 'order' : 'fast'; try { localStorage.setItem('sta-lap-sort', state.lapSort); } catch (e) { /* storage may be off */ } renderLaps(); } });
     box.appendChild(h('div', { class: 'lap-tools' }, [
-      h('button', { class: 'link', type: 'button', text: 'Overlay all ' + timed.length + ' timed laps', disabled: timed.length ? null : true,
-        onclick: () => { for (const l of timed) addLap(s.id, l.idx); renderAll(); } }),
-      h('button', { class: 'link', type: 'button', text: 'Clear overlay', disabled: state.overlay.length ? null : true, onclick: () => { clearLaps(); renderAll(); } }),
+      h('label', { class: 'lap-count' }, ['Show ', countSel]),
+      h('span', { class: 'lap-tools-end' }, [sortBtn,
+        h('button', { class: 'link', type: 'button', text: 'Clear', title: 'Take every lap off the overlay', disabled: state.overlay.length ? null : true, onclick: () => { clearLaps(); renderAll(); } })]),
     ]));
-    const rows = s.laps.map((l) => {
-      const e = findEntry(s.id, l.idx), isRef = !!e && e === ref;
+    const list = sortBy === 'fast' ? ranked.concat(s.laps.filter((l) => !rank.has(l.idx))) : s.laps;
+    const toggle = (l) => { if (findEntry(s.id, l.idx)) removeLap(s.id, l.idx); else addLap(s.id, l.idx); renderAll(); };
+    const rows = list.map((l) => {
+      const e = findEntry(s.id, l.idx), isRef = !!e && e === ref, r = rank.get(l.idx);
       const status = !l.complete ? (l.note || 'partial') : l.pit ? 'pit lane' : !l.valid ? (l.note || 'not counted') : (l.note || '');
-      return h('tr', { class: l.complete && l.valid ? '' : 'dim', style: e ? 'box-shadow: inset 3px 0 0 var(' + colourVarOf(e.slot) + ')' : null }, [
+      const colour = e ? 'var(' + colourVarOf(e.slot) + ')' : null;
+      return h('tr', { class: (l.complete && l.valid ? '' : 'dim') + (e ? ' picked' : ''), style: e ? 'box-shadow: inset 3px 0 0 ' + colour : null,
+        onclick: (ev) => { if (ev.target.closest('button, input')) return; toggle(l); } }, [
+        h('td', { class: 'pick' }, h('input', { type: 'checkbox', checked: !!e, style: e ? 'accent-color: ' + colour : null,
+          'aria-label': (e ? 'Take lap ' + l.num + ' (' + letterOf(e.slot) + ') off the overlay' : 'Overlay lap ' + l.num), onchange: () => toggle(l) })),
+        h('td', { class: 'num lap-letter', text: e ? letterOf(e.slot) : '', style: e ? 'color: ' + colour : null }),
         h('td', { class: 'num', text: String(l.num) }),
         h('td', { class: 'num strong', text: l.complete ? U.fmtLap(l.time) : '–' }),
-        h('td', { class: 'num', text: l.complete && l.valid && best != null ? (l.time === best ? 'best' : U.fmtDelta(l.time - best)) : '' }),
+        h('td', { class: 'num', text: l.complete && l.valid && best != null ? (l.time === best ? 'best' : U.fmtDelta(l.time - best)) : '', title: r ? 'Number ' + r + ' of ' + ranked.length + ' by lap time' : null }),
         h('td', { class: 'lap-note', text: status, title: status }),
-        h('td', {}, h('button', { class: 'pill' + (e ? ' on' : ''), type: 'button', 'aria-pressed': e ? 'true' : 'false', style: e ? 'background: var(' + colourVarOf(e.slot) + '); border-color: var(' + colourVarOf(e.slot) + ')' : null,
-          title: e ? 'Remove lap ' + letterOf(e.slot) + ' from the overlay' : 'Add this lap to the overlay', 'aria-label': (e ? 'Remove lap ' : 'Overlay lap ') + l.num, text: e ? letterOf(e.slot) : '+',
-          onclick: () => { if (e) removeLap(s.id, l.idx); else addLap(s.id, l.idx); renderAll(); } })),
         h('td', {}, h('button', { class: 'pill ref' + (isRef ? ' on' : ''), type: 'button', 'aria-pressed': isRef ? 'true' : 'false', title: isRef ? 'This is the reference lap' : 'Make this the reference lap (time differences are measured against it)',
           'aria-label': 'Reference lap ' + l.num, text: 'Ref', onclick: () => { setRef(s.id, l.idx); renderAll(); } })),
       ]);
     });
     box.appendChild(h('table', { class: 'laps' }, [
-      h('thead', {}, h('tr', {}, ['Lap', 'Time', 'Gap', '', 'Overlay', ''].map((t) => h('th', { text: t })))),
+      h('thead', {}, h('tr', {}, ['', '', 'Lap', 'Time', 'Gap', '', ''].map((t) => h('th', { text: t })))),
       h('tbody', {}, rows),
     ]));
+    if (mine.length > 6) box.appendChild(h('p', { class: 'hint', text: mine.length + ' laps overlaid. Charts stay readable up to about six; the extra laps are drawn in grey.' }));
   }
 
   function renderLapbar() {
@@ -488,7 +520,7 @@
     const laps = overlayLaps(), ref = laps.find((l) => l.isRef) || null;
     bar.className = 'lapbar' + (laps.length > 3 ? ' dense' : '');
     if (!laps.length) {
-      bar.appendChild(h('div', { class: 'lapchip' }, [h('span', { class: 'lapchip-meta', text: state.sessions.length ? 'No laps selected. Use the + buttons in the lap list to overlay as many laps as you like.' : 'Load a telemetry file, then pick laps to overlay.' })]));
+      bar.appendChild(h('div', { class: 'lapchip' }, [h('span', { class: 'lapchip-meta', text: state.sessions.length ? 'No laps selected. Tick laps in the lap list, or choose how many of the fastest to show.' : 'Load a telemetry file, then pick laps to overlay.' })]));
       return;
     }
     for (const p of laps) {
@@ -581,5 +613,5 @@
     });
   }
 
-  STA.app = { start, state, h, pick, active, sessionById, overlayLaps, addLap, removeLap, setRef, clearLaps, letterOf, colourVarOf, analysisFor, techFor, speed, speedUnit, simName, dateText, dayText, timeText, whenText, say, addFiles, refreshLibrary, refreshLib, scanLib, addFolder, removeFolder, openCombo, runFinished, renderRecorder, renderAll, renderLapbar, renderLaps, activate };
+  STA.app = { start, state, h, pick, active, sessionById, overlayLaps, addLap, removeLap, setRef, clearLaps, showFastest, rankedLaps, letterOf, colourVarOf, analysisFor, techFor, speed, speedUnit, simName, dateText, dayText, timeText, whenText, say, addFiles, refreshLibrary, refreshLib, scanLib, addFolder, removeFolder, openCombo, runFinished, renderRecorder, renderAll, renderLapbar, renderLaps, activate };
 })(typeof window !== 'undefined' ? window : globalThis);
