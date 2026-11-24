@@ -82,19 +82,26 @@ test('each idea gets a verdict against the rules, the other problems, the limits
   assert.strictEqual(STA.advisor.judgeIdea({ role: 'tc', dir: '+', for: 'oversteer|exit|low' }, m.findings, flat, {}).verdict, 'impossible');
 });
 
-test('an idea replaces the app\'s opposite change when that change works against what was felt', () => {
+test('a change that works against what was felt is left out; the driver\'s own idea still goes in', () => {
   const setup = setupFor();
   // the telemetry asks for a stiffer rear bar (mid-corner understeer); the driver felt the rear loose on exit, a lot
   const notes = { felt: [{ kind: 'oversteer', phase: 'exit', band: 'low', amount: 2 }], ideas: [{ role: 'arb', axle: 'rear', dir: '-', for: 'oversteer|exit|low' }] };
   const m = F.merge({ findings: [Object.assign({}, usMidLow, { severity: 0.95 })], notes: [] }, notes);
   const plain = STA.advisor.advise(m, setup, {});
-  const stiff = plain.suggestions.find((s) => s.blockKey === 'arb|rear|+');
-  assert.ok(stiff && stiff.againstFelt && !stiff.primary, 'the app\'s stiffer rear bar is marked and moved down');
+  // a stiffer rear bar would loosen the exit the driver felt step out: it is left out, with the reason
+  assert.ok(!plain.suggestions.some((s) => s.blockKey === 'arb|rear|+'), plain.suggestions.map((s) => s.blockKey).join(', '));
+  const out = plain.held.find((h) => h.finding === 'Mid-corner understeer in slow corners');
+  assert.deepStrictEqual(out.items.map((i) => [i.title, i.why]), [['Stiffen the rear anti-roll bar', 'would loosen the rear on corner exit, where you already felt it step out']]);
+  assert.strictEqual(plain.suggestions[0].blockKey, 'arb|front|-', 'the understeer is cured from the front instead');
+  // and the app does not answer the felt exit oversteer by adding understeer where the front already pushes
+  assert.ok(!plain.suggestions.some((s) => s.blockKey === 'arb|rear|-'));
+  assert.ok(plain.held.some((h) => h.items.some((i) => i.title === 'Soften the rear anti-roll bar' && /would add understeer mid-corner, where the front already pushes/.test(i.why))));
+  // the driver's own idea is still theirs to try, with what it costs said plainly
   const adv = STA.advisor.advise(m, setup, { ideas: notes.ideas });
-  assert.ok(!adv.suggestions.some((s) => s.blockKey === 'arb|rear|+'), 'both cannot be done: the app\'s goes');
   const soft = adv.suggestions.find((s) => s.blockKey === 'arb|rear|-');
   assert.ok(soft && soft.yours);
-  assert.match(adv.ideas[0].reasons.join(' '), /Replaces the app's stiffen the rear anti-roll bar \(for mid-corner understeer in slow corners\), which worked against what you felt\./);
+  assert.match(adv.ideas[0].reasons.join(' '), /Also makes mid-corner understeer in slow corners worse\./);
+  assert.ok(!adv.held.some((h) => h.items.some((i) => i.title === 'Soften the rear anti-roll bar')), 'not listed as left out once it is in as the driver\'s idea');
 });
 
 test('ideas are ranked with the app\'s own changes; the unsound ones are held back with an alternative', () => {

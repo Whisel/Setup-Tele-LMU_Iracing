@@ -539,8 +539,8 @@
     if (!s) return view().appendChild(empty('Setup advice', 'Load a telemetry file to get setup changes for the setup that was on the car.'));
     if (!s.refLap) return view().appendChild(empty('No complete lap', 'Setup advice needs at least one complete lap.'));
     const { an: measured, merged: an, notes, adv } = A().analysisFor(s), sim = s.meta.sim, car = s.meta.car;
-    // Ticked to start with: the app's first two, and every idea of yours that it agrees with.
-    const checked = ui().adviceChecked && ui().adviceFor === s.id ? ui().adviceChecked : (ui().adviceFor = s.id, ui().adviceChecked = Object.fromEntries(adv.suggestions.filter((x) => x.primary).slice(0, 2).concat(adv.suggestions.filter((x) => x.yours && x.ideaVerdict === 'good')).map((x) => [x.key, true])));
+    // Ticked to start with: the app's first two that come without a known side effect, and every idea of yours that it agrees with.
+    const checked = ui().adviceChecked && ui().adviceFor === s.id ? ui().adviceChecked : (ui().adviceFor = s.id, ui().adviceChecked = Object.fromEntries(adv.suggestions.filter((x) => x.primary && !x.sideEffect && !x.conflict).slice(0, 2).concat(adv.suggestions.filter((x) => x.yours && x.ideaVerdict === 'good')).map((x) => [x.key, true])));
     const again = () => { ui().contestOpen = null; ui().adviceChecked = null; render(); };
 
     view().appendChild(feelPanel(s, an, notes, adv));
@@ -556,6 +556,8 @@
       if (x.yours) tags.push(x.ideaVerdict === 'try' ? ['warn', 'Your idea: worth one run'] : ['good', 'Your idea']);
       if (x.learned) tags.push(['good', 'Learned on this car']);
       if (x.rearFirst) tags.push(['warn', 'After the rear is settled: the rear slides on this car']);
+      if (x.undo) tags.push(['warn', 'Takes back an earlier change']);
+      if (x.sideEffect) tags.push(['warn', 'Side effect: ' + x.sideEffect]);
       if (x.bigger) tags.push(['warn', 'Bigger step: one was too small last time']);
       if (x.historyText) tags.push([x.demoted ? 'bad' : 'good', x.historyText]);
       if (x.conflict) tags.push(['warn', 'Works against: ' + x.conflict.join('; ')]);
@@ -588,12 +590,25 @@
     });
     const nameIn = h('input', { type: 'text', class: 'text', value: (s.setup ? s.setup.name : 'Setup') + ' – revised', 'aria-label': 'Name for the revised setup' });
     const nOut = adv.skipped.reduce((n, k) => n + k.items.length, 0);
+    // Oversteer that starts with the driver's feet: said before any change to the car.
+    const driveFirst = adv.driving && adv.driving.length ? h('div', { class: 'drive-first' }, [h('h3', { text: 'Start with the driving' }),
+      h('ul', { class: 'plain' }, adv.driving.map((d) => h('li', {}, [h('b', { text: d.finding + '. ' }), d.text + ' ', h('span', { class: 'evidence', text: 'Try: ' + d.tips.join(' ') })]))),
+      h('p', { class: 'hint', text: 'The changes below for these act only in that part of the corner. Nothing is offered that would trade them for understeer elsewhere.' })]) : null;
+    // Changes left out because of what they would do elsewhere, grouped by the reason.
+    const heldBy = new Map();
+    for (const k of adv.held || []) for (const i of k.items) { const e = heldBy.get(i.why) || heldBy.set(i.why, { titles: new Set(), findings: new Set() }).get(i.why); e.titles.add(i.title); e.findings.add(lower(k.finding)); }
+    const heldBlock = heldBy.size ? h('div', { class: 'skipped' }, [h('h3', { text: 'Left out on purpose' }),
+      h('ul', { class: 'plain' }, Array.from(heldBy, ([why, e]) => h('li', {}, [h('b', { text: Array.from(e.titles).join(', ') + ': ' }), why + '. ', h('span', { class: 'evidence', text: 'The usual answer to ' + Array.from(e.findings).join('; ') + '.' })]))),
+      h('p', { class: 'hint', text: 'If you want one anyway, add it under "What you want to try" above and it is weighed against what it costs.' })]) : null;
     view().appendChild(h('section', { class: 'panel' }, [
       h('h2', { text: 'Changes to make' }),
       h('p', { class: 'hint', text: (an.lapNums.length === 1 ? 'Lap ' : 'Laps ') + an.lapNums.join(', ') + ' · ' + car + ' at ' + s.trackName + '. Try the ticked ones, drive 3–5 laps, reload.' }),
+      driveFirst,
       list,
+      heldBlock,
       adv.exhausted && adv.exhausted.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'No setup route left: drive around it' }),
-        h('ul', { class: 'plain' }, adv.exhausted.map((e) => h('li', {}, [h('b', { text: e.finding + ': ' }), e.tips.length ? e.tips.slice(0, 2).join(' ') : 'allow one of the contested changes again.']))),
+        h('ul', { class: 'plain' }, adv.exhausted.map((e) => h('li', {}, [h('b', { text: e.finding + ': ' }), (e.why ? e.why + ' ' : '') + (e.tips.length ? e.tips.slice(0, 2).join(' ')
+          : e.held ? 'every change for this would make another part of the corner worse.' : 'allow one of the contested changes again.')]))),
         h('button', { class: 'link', type: 'button', text: 'Open driving technique', onclick: () => { A().state.tab = 'technique'; A().renderAll(); } })]) : null,
       s.setup && adv.suggestions.length ? h('div', { class: 'actions' }, [nameIn, h('button', { class: 'btn', type: 'button', text: 'Save ticked changes as a new setup', onclick: async () => {
         const picked = adv.suggestions.filter((x) => checked[x.key]);
@@ -638,7 +653,7 @@
       h('h2', { text: notes.felt.length ? 'What the telemetry shows, and what you felt' : 'What the telemetry shows' }),
       an.findings.length ? h('div', { class: 'findings compact' }, an.findings.map((f) => h('article', { class: 'finding' }, [
         h('div', { class: 'finding-head' }, [h('h3', { text: f.title }), f.felt ? h('span', { class: 'tag-you', text: 'You felt' }) : f.agreed ? h('span', { class: 'tag-you', text: 'Measured and felt' }) : null, confTag(f.confidence)]),
-        h('p', {}, [f.detail + ' ', h('span', { class: 'evidence', text: f.evidence })]),
+        h('p', {}, [f.detail + ' ', f.causeText ? f.causeText + ' ' : '', h('span', { class: 'evidence', text: f.evidence })]),
       ]))) : h('p', { class: 'empty', text: 'Nothing stands out in these laps.' }),
       an.setAside && an.setAside.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Set aside: you felt otherwise' }),
         h('ul', { class: 'plain' }, an.setAside.map((f) => h('li', {}, [h('b', { text: f.title + ' (telemetry): ' }), 'you felt ' + lower(f.because.title) + '. Your feel is used.'])))]) : null,

@@ -107,7 +107,7 @@
     // This session's best lap as a pace profile: where the lap time is spent.
     if (!an.pace) an.pace = STA.pace.profile(session, an.balance ? an.balance.gmax : null) || {};
     const pace = an.pace.t ? { shares: STA.pace.shares(an.pace), track: session.trackName, when: session.meta.recordedAt } : null;
-    return { an, merged, notes, outcomes, know, pace, adv: STA.advisor.advise(merged, session.setup, { ideas: notes.ideas, pace, learned: know.links, blocked: STA.library.blocked.set(sim, car), limits: STA.library.limits.map(sim, car), contested: STA.library.contested.map(sim, car), track: session.trackName, outcomes }) };
+    return { an, merged, notes, outcomes, know, pace, adv: STA.advisor.advise(merged, session.setup, { ideas: notes.ideas, pace, learned: know.links, trail: STA.learning.trail(state.summaries, state.setups, session), blocked: STA.library.blocked.set(sim, car), limits: STA.library.limits.map(sim, car), contested: STA.library.contested.map(sim, car), track: session.trackName, outcomes }) };
   }
 
   /* Driving-technique analysis, cached per session. */

@@ -281,19 +281,49 @@ test('a rear that steps out and is caught is reported as oversteer, where it hap
   assert.strictEqual(plain.balance.slide, undefined);
 });
 
-test('understeer next to a sliding rear: the rear comes first and no cure for the front may loosen the rear', async () => {
-  const s = await sessionOf({ looseExit: 1, understeer: 0.8 }), an = STA.handling.analyse(s);
+test('understeer next to a rear that is loose on its own: the rear comes first and no cure for the front may loosen it', async () => {
+  // the rear slides on the way in, while the car is still slowing down: nothing to do with the throttle
+  const s = await sessionOf({ looseEntry: 1, understeer: 0.8 }), an = STA.handling.analyse(s);
   const us = an.findings.filter((f) => f.kind === 'understeer'), os = an.findings.filter((f) => f.kind === 'oversteer');
   assert.ok(us.length >= 1 && os.length >= 1, JSON.stringify(an.findings.map((f) => f.id)));
-  assert.ok(us.every((f) => f.rearFirst && /settle the rear first/.test(f.evidence)));
+  assert.ok(os.every((f) => f.cause === 'braking' && /on the brakes/.test(f.causeText)), JSON.stringify(os.map((f) => [f.id, f.cause])));
+  assert.ok(us.every((f) => f.rearFirst && !f.first && /settle the rear first/.test(f.evidence)));
   assert.ok(Math.max(...os.map((f) => f.severity)) > Math.max(...us.map((f) => f.severity)), 'the sliding rear outranks the understeer');
   const adv = STA.advisor.advise(an, s.setup, {});
   const offered = adv.suggestions.map((x) => x.blockKey);
   assert.deepStrictEqual(offered.filter((k) => REAR_LOOSENING.includes(k)), [], 'offered: ' + offered.join(', '));
   assert.ok(adv.suggestions[0].findingIds.some((id) => id.indexOf('os-') === 0), 'first change is for the rear: ' + adv.suggestions[0].title);
+  assert.ok(offered.includes('brakeBias||+'), 'a slide on the brakes is answered with the brake bias: ' + offered.join(', '));
   const firstFront = adv.suggestions.findIndex((x) => x.rearFirst), lastRear = adv.suggestions.map((x) => x.findingIds.some((id) => id.indexOf('os-') === 0)).lastIndexOf(true);
   assert.ok(firstFront < 0 || firstFront > lastRear, 'every change for the rear is listed before the front-only ones');
   // the same understeer on a car whose rear is stable still gets the usual cures
   const calm = await sessionOf({ slip: true, understeer: 0.8 }), advCalm = STA.advisor.advise(STA.handling.analyse(calm), calm.setup, {});
   assert.ok(advCalm.suggestions.some((x) => x.blockKey === 'arb|front|-'), advCalm.suggestions.map((x) => x.blockKey).join(', '));
+});
+
+test('understeer on a car whose rear only steps out on the throttle: the understeer comes first and is not made worse', async () => {
+  const s = await sessionOf({ looseExit: 1, understeer: 0.8 }), an = STA.handling.analyse(s);
+  const us = an.findings.filter((f) => f.kind === 'understeer'), os = an.findings.filter((f) => f.kind === 'oversteer');
+  assert.ok(us.length >= 1 && os.length >= 1, JSON.stringify(an.findings.map((f) => f.id)));
+  assert.ok(os.every((f) => f.cause === 'power' && /^It starts on the throttle: 100% of it is with the throttle on/.test(f.causeText)), os.map((f) => f.causeText).join(' | '));
+  assert.ok(os.every((f) => /A slide typically begins at \d+% throttle with \d+% of the corner's steering still on/.test(f.causeText)));
+  assert.ok(us.every((f) => f.first && !f.rearFirst), 'not "rear first": the rear is not loose on its own');
+  assert.ok(us.some((f) => /this comes first: a front that pushes leaves steering on when the power goes down/.test(f.evidence)));
+  assert.ok(os.every((f) => f.follows && f.severity < f.raw && /cure that first and this often goes with it/.test(f.causeText)));
+  assert.ok(Math.max(...us.map((f) => f.severity)) > Math.max(...os.map((f) => f.severity)), 'the understeer outranks the slide on the throttle');
+  const adv = STA.advisor.advise(an, s.setup, {});
+  const offered = adv.suggestions.map((x) => x.blockKey);
+  assert.strictEqual(adv.suggestions[0].blockKey, 'arb|front|-', 'first: more front grip. Offered: ' + offered.join(', '));
+  // nothing that adds understeer to the rest of the corner, and nothing that takes grip or drive from the rear axle
+  const ADDS_UNDERSTEER = ['arb|rear|-', 'arb|front|+', 'spring|rear|-', 'spring|front|+', 'rideHeight|rear|-', 'rearWing|rear|+'];
+  const FROM_THE_REAR = ['arb|rear|+', 'spring|rear|+', 'rideHeight|rear|+', 'rearWing|rear|-', 'brakeBias||-', 'diffCoast||-', 'diffPreload||-'];
+  assert.deepStrictEqual(offered.filter((k) => ADDS_UNDERSTEER.includes(k) || FROM_THE_REAR.includes(k)), [], 'offered: ' + offered.join(', '));
+  assert.ok(offered.includes('tc||+'), 'the slide itself gets what acts only on the throttle');
+  // the driver is told before the car is changed
+  assert.deepStrictEqual(adv.driving.map((d) => [d.cause, d.phase]), [['power', 'exit']]);
+  assert.match(adv.driving[0].tips[0], /Squeeze the throttle on as you take the steering off/);
+  // a neutral car that slides on the throttle: what acts on the throttle first, the rear bar only after that
+  const neutral = await sessionOf({ looseExit: 1 }), advN = STA.advisor.advise(STA.handling.analyse(neutral), neutral.setup, {});
+  assert.deepStrictEqual(advN.suggestions.map((x) => x.blockKey).slice(0, 2), ['tc||+', 'toe|rear|+']);
+  assert.deepStrictEqual(advN.held, []);
 });

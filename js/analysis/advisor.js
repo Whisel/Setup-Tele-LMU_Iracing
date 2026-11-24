@@ -4,7 +4,23 @@
    The rules are the general ones race engineers use for any car. Each rule is a
    list of options in the order they are normally tried; the advisor keeps the
    first ones that the loaded car actually lets you adjust, and reports the rest
-   as "not adjustable on this car". */
+   as "not adjustable on this car".
+
+   Three checks keep the advice from chasing one problem into another:
+
+   1. Where a setting acts. Bars and springs set how the load is shared between the axles
+      for as long as the car is cornering, so they move the balance in every part of the
+      corner. Dampers only act while the car is still rolling or pitching, which is the
+      way in and the way out. Brake bias and engine braking act on the way in; the
+      differential's power side and the traction control only on the throttle. (HP
+      Academy, damper tuning; the same split is in most setup guides.) SHIFT below holds
+      this as numbers, and a change is left out when it would push another part of the
+      corner further the way it already leans.
+   2. Why the rear slides. Oversteer that starts on the throttle is answered with what acts
+      on the throttle, never by adding understeer to the rest of the corner (handling.js).
+   3. What has already been tried. The same change is not offered a third time in a row
+      when the problem it is for has not shrunk, and a change made earlier is offered back
+      when the part of the corner it pushes on has got worse since (learning.js, trail). */
 (function (root) {
   'use strict';
   const STA = (root.STA = root.STA || {});
@@ -132,6 +148,18 @@
       o('rearWing', 'rear', '+', 'More rear downforce.', 'More drag.'),
       o('arb', 'rear', '-', 'More rear grip.', 'More understeer.'),
     ],
+    // The rear steps out as the throttle goes on. What acts only under power comes first; the
+    // bar and springs, which move the balance of the whole corner, come last.
+    'oversteer|exit|power': [
+      o('tc', null, '+', 'Cuts power sooner when the rear tyres start to slip. Acts only on the throttle, so the rest of the corner is untouched.', 'Slower if set too high.'),
+      o('slowBump', 'rear', '-', 'Lets the rear squat and load its tyres as the power comes in. Acts only while the car settles onto the rear.', 'Less platform control.'),
+      o('toe', 'rear', '+', 'Rear toe-in keeps the rear in line as the power goes down.', 'More drag and rear tyre heat; slightly calmer turn-in.'),
+      o('diffPower', null, '-', 'Less lock lets the rear break away gradually instead of both tyres letting go together.', 'More inside-wheel spin.'),
+      o('camber', 'rear', '+', 'A flatter rear tyre puts more of its tread down for traction.', 'A little less rear cornering grip mid-corner.'),
+      o('pressure', 'rear', '-', 'Larger rear contact patch.', 'More tyre heat on long runs.'),
+      o('arb', 'rear', '-', 'More rear grip as power goes down.', 'More understeer through the whole corner, not only on exit.'),
+      o('spring', 'rear', '-', 'More traction.', 'More squat, and more understeer through the whole corner.'),
+    ],
     frontLock: [
       o('brakeBias', null, '-', 'Takes braking effort off the front tyres.', 'Rear becomes less stable under braking.'),
       o('brakePressure', null, '-', 'Makes it harder to exceed the tyres with the pedal.', 'Longer pedal effort for the same stop.'),
@@ -174,9 +202,15 @@
   };
 
   function ruleFor(f) {
+    if (f.kind === 'oversteer' && f.phase === 'exit' && f.cause === 'power' && f.band !== 'high') return RULES['oversteer|exit|power'];
+    // Wheelspin while the rear also steps out: both tyres have let go, so more lock is not the answer.
+    if ((f.kind === 'wheelspin' || f.kind === 'traction') && f.withSlide) return RULES[f.kind].filter((x) => !(x.role === 'diffPower' && x.dir === '+'));
     if (f.kind === 'understeer' || f.kind === 'oversteer') {
       const speed = f.band === 'high' ? 'fast' : 'slow';
-      const list = RULES[f.kind + '|' + f.phase + '|' + speed] || [];
+      // A rear that slides on the brakes or as the driver lifts, even when that carries on to the
+      // middle of the corner, is answered with what acts off the throttle: the way-in list.
+      const offPower = f.kind === 'oversteer' && f.phase === 'mid' && (f.cause === 'braking' || f.cause === 'lift');
+      const list = (RULES[f.kind + '|' + (offPower ? 'entry' : f.phase) + '|' + speed] || []).filter((x) => !(offPower && f.cause === 'lift' && x.role === 'brakeBias'));
       // Medium-speed corners feel both mechanical and aero changes: lead with mechanical, then aero.
       if (f.band === 'medium' || f.band === 'all') {
         const aero = (RULES[f.kind + '|' + f.phase + '|fast'] || []).filter((x) => x.role === 'rearWing' || x.role === 'frontAero');
@@ -185,6 +219,89 @@
       return list;
     }
     return RULES[f.kind] || [];
+  }
+
+  /* How one step of a setting moves the balance in each part of the corner: [entry, mid, exit].
+     Positive means the "+" direction moves that part toward understeer; the size is how strongly,
+     against the strongest lever (1). Under 0.3 is treated as too small to matter.
+       bars, springs   share of the load transfer an axle carries while the car corners: every phase
+       ride height     rake: a little of every phase
+       wings           every phase, but only where the car is quick enough for them to work
+       dampers         only while the car rolls or pitches: front bump and rear rebound on the way in,
+                       rear bump and front rebound on the way out
+       brake bias, engine braking, coast side of the differential: the way in
+     Left out: traction control (it only cuts power once the rear slips, so it moves no balance);
+     tyre pressure (the direction depends on which side of its best the tyre is on); the power side
+     of the differential (more lock pushes on first throttle, then snaps when both tyres let go). */
+  const SHIFT = {
+    'arb|front': [0.6, 1, 0.25], 'arb|rear': [-0.6, -1, -0.8],
+    'spring|front': [0.5, 0.8, 0.25], 'spring|rear': [-0.4, -0.8, -0.8],
+    'rideHeight|front': [0.3, 0.4, 0.2], 'rideHeight|rear': [-0.3, -0.4, -0.4],
+    'rearWing|rear': [0.7, 1, 0.7], 'frontAero|front': [-0.7, -1, -0.6],
+    'camber|front': [0.2, 0.5, 0.2], 'camber|rear': [-0.2, -0.5, 0.1],
+    'toe|front': [0.4, 0.1, 0], 'toe|rear': [0.4, 0.2, 0.5],
+    'slowBump|front': [0.4, 0, 0], 'slowBump|rear': [-0.3, 0, -0.5],
+    'slowRebound|front': [0, 0, 0.3], 'slowRebound|rear': [-0.4, 0, 0],
+    'brakeBias|': [0.7, 0, 0], 'diffCoast|': [0.7, 0.2, 0], 'diffPreload|': [0.4, 0.4, 0.2],
+    'engineBraking|': [-0.5, 0, 0],
+  };
+  const PH = ['entry', 'mid', 'exit'], BD = ['low', 'medium', 'high'];
+  const PH_WHERE = { entry: 'on corner entry', mid: 'mid-corner', exit: 'on corner exit' };
+  const AERO_ROLE = { rearWing: 1, frontAero: 1 };
+  // How much of a slow, medium or fast corner a mechanical or an aero change reaches.
+  const REACH = { mech: { low: 1, medium: 1, high: 0.4 }, aero: { low: 0, medium: 0.6, high: 1 } };
+  const shiftOf = (role, axle, dir) => { const v = SHIFT[role + '|' + (axle || '')]; return v ? v.map((x) => x * (dir === '+' ? 1 : -1)) : null; };
+
+  /* How far each part of the corner already leans, 0 to 1, by speed band:
+       us     the front pushes (steering held beyond what the car needs, or the driver felt it)
+       os     the rear is loose on its own (not counting slides that start on the throttle)
+       power  the rear steps out or spins up on the throttle (exit only) */
+  function stateOf(analysis) {
+    const st = {};
+    for (const ph of PH) st[ph] = { us: { low: 0, medium: 0, high: 0 }, os: { low: 0, medium: 0, high: 0 }, idx: {}, felt: {} };
+    st.exit.power = 0;
+    const M = analysis.balance && analysis.balance.matrix;
+    if (M) for (const ph of PH) for (const b of BD) {
+      const v = M[ph][b] && M[ph][b].idx;
+      if (v == null) continue;
+      st[ph].idx[b] = v;
+      st[ph].us[b] = U.clamp((v - 0.15) / 0.5, 0, 1);   // +25% reads 0.2, +40% reads 0.5
+      st[ph].os[b] = U.clamp((-v - 0.03) / 0.3, 0, 1);  // −10% reads 0.23
+    }
+    for (const f of analysis.findings || []) {
+      const w = f.raw != null ? f.raw : f.severity || 0;
+      if ((f.kind === 'wheelspin' && f.axle !== 'front') || f.kind === 'traction' || (f.kind === 'oversteer' && f.cause === 'power' && f.phase !== 'entry')) { st.exit.power = Math.max(st.exit.power, w); continue; }
+      if ((f.kind !== 'understeer' && f.kind !== 'oversteer') || !st[f.phase]) continue;
+      const side = f.kind === 'understeer' ? 'us' : 'os';
+      for (const b of BD) if (f.band === b || f.band === 'all' || !f.band) { st[f.phase][side][b] = Math.max(st[f.phase][side][b], w); if (f.felt || f.agreed) st[f.phase].felt[side] = true; }
+    }
+    return st;
+  }
+
+  /* Would this change make another part of the corner worse than it already is?
+     Returns null, or { ph, side, text }. A side effect counts when it is large against the problem
+     being fixed (0.4 of its severity), so a serious problem can still be bought with a small cost. */
+  function harmOf(role, axle, dir, f, st) {
+    const sh = shiftOf(role, axle, dir);
+    if (!sh || !st) return null;
+    // f = null asks only whether there is a side effect worth mentioning.
+    const need = f ? Math.max(0.1, 0.4 * (f.severity || 0.3)) : 0.15, reach = REACH[AERO_ROLE[role] ? 'aero' : 'mech'];
+    let worst = null;
+    const take = (w, o) => { if (w >= need && (!worst || w > worst.w)) worst = Object.assign({ w }, o); };
+    PH.forEach((ph, k) => {
+      const s = sh[k];
+      if (Math.abs(s) < 0.3) return;
+      const side = s > 0 ? 'us' : 'os';
+      for (const b of BD) take(st[ph][side][b] * Math.abs(s) * reach[b], { ph, side, band: b, idx: st[ph].idx[b], felt: !!st[ph].felt[side] });
+      // Taking grip or drive from the rear axle of a car that already steps out on the throttle.
+      if (ph === 'exit' && s < 0 && st.exit.power && axle !== 'front') take(st.exit.power * Math.abs(s), { ph, side: 'power' });
+    });
+    if (!worst) return null;
+    const pct = (v) => (v > 0 ? '+' : '−') + Math.abs(Math.round(v * 100)) + '%';
+    worst.text = worst.side === 'power' ? 'would take traction from the rear, which already steps out on the throttle'
+      : worst.side === 'us' ? 'would add understeer ' + PH_WHERE[worst.ph] + ', where ' + (worst.felt ? 'you already felt it' : 'the front already pushes' + (worst.idx != null && worst.idx >= 0.15 ? ' (' + pct(worst.idx) + ')' : ''))
+        : 'would loosen the rear ' + PH_WHERE[worst.ph] + ', where ' + (worst.felt ? 'you already felt it step out' : 'it already slides');
+    return worst;
   }
 
   /* mult scales the step (the baseline builder can ask for two or three steps). */
@@ -380,6 +497,78 @@
     return null; // slower both ways, or no real difference: leave the wing where it is
   }
 
+  /* ---------- what has already been tried (the trail from learning.js) ---------- */
+
+  const flip = (dir) => (dir === '+' ? '-' : '+');
+  const sevOf = (f) => (f.raw != null ? f.raw : f.severity || 0);
+  const runsText = (n) => (n === 1 ? '1 change' : n + ' changes in a row');
+
+  /* The same change made twice running without the problem shrinking by a third: a third
+     step is not the answer. Returns the reason, or null. */
+  function repeatOf(trail, key, dir, f) {
+    const e = trail && trail.get(key);
+    if (!e || e.dir !== dir || e.n < 2 || !e.then) return null;
+    const was = (e.then.findings || e.then.tendencies || []).find((x) => x.id === f.id);
+    if (!was || !U.isNum(was.severity)) return null; // the problem was not there when those changes began: not a loop
+    if (sevOf(f) <= 0.67 * sevOf(was)) return null;  // it is working: carry on
+    return 'already made ' + e.n + ' times in a row (' + e.from + ' → ' + e.to + ') and this has not shrunk: another step will not fix it';
+  }
+
+  /* Steps already made for a problem (or for the other views of the same problem, see `group`)
+     that are usual answers to it and have not shrunk it by a third. */
+  function stepsSpent(f, findings, trail) {
+    if (!trail || !trail.size) return 0;
+    const mates = f.group ? findings.filter((x) => x.group === f.group) : [f];
+    let steps = 0;
+    for (const e of trail.values()) {
+      const then = e.then ? e.then.findings || e.then.tendencies || [] : [];
+      if (mates.some((m) => {
+        const was = then.find((x) => x.id === m.id);
+        return was && sevOf(m) > 0.67 * sevOf(was) && ruleFor(m).some((o) => o.role === e.role && ((o.axle === '@' ? m.axle : o.axle) || null) === (e.axle || null) && o.dir === e.dir);
+      })) steps += e.n;
+    }
+    return steps;
+  }
+
+  /* How much a problem has grown since the session before a run of changes began. */
+  function grownSince(f, then, analysis) {
+    if (!then) return null;
+    const pct = (v) => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(Math.round(v * 100)) + '%';
+    if (f.kind === 'understeer') {
+      const band = f.band && f.band !== 'all' ? f.band : 'all';
+      const now = analysis.balance && analysis.balance.matrix[f.phase] && analysis.balance.matrix[f.phase][band] ? analysis.balance.matrix[f.phase][band].idx : null;
+      const was = then.balance && then.balance[f.phase] ? then.balance[f.phase][band] : null;
+      return now != null && was != null && now - was >= 0.08 ? { by: now - was, text: 'gone from ' + pct(was) + ' to ' + pct(now) } : null;
+    }
+    const was = (then.findings || then.tendencies || []).find((x) => x.id === f.id);
+    if (!was) return f.measured || !f.felt ? { by: sevOf(f), text: 'appeared' } : null;
+    return sevOf(f) - sevOf(was) >= 0.15 ? { by: sevOf(f) - sevOf(was), text: 'got worse' } : null;
+  }
+
+  /* Earlier changes that push this part of the corner the way it has since gone wrong: taking
+     one back comes before anything new. Strongest lever first. */
+  function undoFor(f, trail, analysis) {
+    if (!trail || !trail.size || (f.kind !== 'understeer' && f.kind !== 'oversteer') || f.cause === 'power') return [];
+    const k = PH.indexOf(f.phase), want = f.kind === 'understeer' ? 1 : -1, out = [];
+    for (const e of trail.values()) {
+      const sh = shiftOf(e.role, e.axle, e.dir);
+      if (!sh || sh[k] * want < 0.3) continue;
+      const g = grownSince(f, e.then, analysis);
+      if (!g) continue;
+      out.push({ role: e.role, axle: e.axle || null, dir: flip(e.dir), lone: true, undo: true, weight: sh[k] * want,
+        effect: 'Takes back part of an earlier change. ' + labelFor(e.role, e.axle) + ' went from ' + e.from + ' to ' + e.to + ' (' + runsText(e.n) + '), and since then ' + lowerFirst(f.title) + ' has ' + g.text + '.',
+        cost: 'Gives back some of what that change was made for.' });
+    }
+    return out.sort((a, b) => b.weight - a.weight).slice(0, 2);
+  }
+
+  /* What to do from the seat when the rear lets go because of what the feet were doing. */
+  const DRIVE = {
+    power: ['Squeeze the throttle on as you take the steering off: the more lock is still on, the less throttle the rear can take.', 'Short-shift out of the slowest corners.'],
+    braking: ['Finish the heavy braking in a straight line and come off the pedal smoothly as you turn in.', 'Downshift a little later, so engine braking is not added to the turn-in.'],
+    lift: ['Ease off the throttle instead of lifting suddenly, or keep a little on to hold the rear.'],
+  };
+
   /* findings + the setup on the car -> ordered suggestions.
      opts.blocked:  Set of "role|axle|dir" keys the driver has ruled out altogether.
      opts.limits:   Map of "paramId|dir" -> { num, raw } limits the driver has reported.
@@ -388,15 +577,28 @@
      opts.contested: Map of "role|axle|dir" -> { reason } for changes the driver has contested.
      opts.learned:  Map of problem ("understeer|mid") -> [{ role, axle, dir, n }], changes that cut that
                     problem on this car although they are not a textbook answer to it (see learning.js).
-     opts.pace:     { shares, track } of this session's best lap, for the wing-level entry (see paceFinding). */
+     opts.pace:     { shares, track } of this session's best lap, for the wing-level entry (see paceFinding).
+     opts.trail:    Map of "role|axle" -> { dir, n, from, to, then }, how each setting has moved over the
+                    sessions leading up to this one (see learning.js).
+     Returns, besides the suggestions:
+       held     [{ finding, items: [{ title, why }] }]  changes left out because they would make another
+                part of the corner worse, or have been repeated without effect
+       driving  [{ finding, cause, text, tips }]         oversteer that starts with the driver's feet */
   function advise(analysis, setup, opts) {
-    const suggestions = [], skipped = [], exhausted = [], byKey = new Map();
+    const suggestions = [], skipped = [], exhausted = [], held = [], byKey = new Map();
+    const driving = [];
+    for (const f of analysis.findings || []) {
+      // One entry per cause: the findings come most severe first, and the advice from the seat is the same.
+      if (f.kind !== 'oversteer' || !DRIVE[f.cause] || driving.some((d) => d.cause === f.cause)) continue;
+      driving.push({ finding: f.title, cause: f.cause, phase: f.phase, text: f.causeText || '', tips: DRIVE[f.cause] });
+    }
     const blocked = { blocked: (opts && opts.blocked) || null, limits: (opts && opts.limits) || null, contested: (opts && opts.contested) || null };
-    if (!setup) return { suggestions, skipped, exhausted, violations: [], car: null, note: 'This file has no setup stored in it, so advice is given as findings only. Load the setup to get specific changes.' };
+    if (!setup) return { suggestions, skipped, exhausted, held, driving, violations: [], car: null, note: 'This file has no setup stored in it, so advice is given as findings only. Load the setup to get specific changes.' };
     const car = STA.carLimits ? STA.carLimits.apply(setup, opts && opts.track, blocked.limits) : null;
     const violations = fixViolations(setup, suggestions, byKey);
 
     const outs = (opts && opts.outcomes) || null, learned = (opts && opts.learned) || null;
+    const st = stateOf(analysis), trail = (opts && opts.trail) || null;
     // Handling findings first; the wing-level question last, so a handling need for the wing wins.
     const wing = paceFinding(analysis, setup, outs, opts && opts.pace);
     for (const f of analysis.findings.concat(wing ? [wing] : [])) {
@@ -408,27 +610,63 @@
       // Understeer on a car whose rear also slides: only changes that add front grip without
       // taking load or stability from the rear (no bars, springs, wing, differential or brake bias).
       if (f.rearFirst) list = list.filter((x) => FRONT_ONLY[x.role] && (x.axle === 'front' || (x.axle === '@' && f.axle === 'front') || x.role === 'frontAero')).map((x) => Object.assign({ lone: true }, x));
+      // Understeer on a car whose rear only steps out on the throttle: add front grip (bar and springs
+      // included) and leave the rear axle, the differential and the brake bias alone.
+      const frontAxle = (x) => x.axle === 'front' || (x.axle === '@' && f.axle === 'front');
+      if (f.first) list = list.filter(frontAxle);
+      // Taking back an earlier change that made this worse comes before anything new.
+      if (!f.option) list = undoFor(f, trail, analysis).concat(list);
       let taken = 0;
-      const unavailable = [], contestedHere = [];
+      const unavailable = [], contestedHere = [], heldHere = [];
+      const tradable = f.kind === 'understeer' || f.kind === 'oversteer' || f.kind === 'wheelspin' || f.kind === 'traction';
+      // A slide or wheelspin that starts with the driver's feet is at most half a setup problem.
+      const feet = (f.kind === 'oversteer' && DRIVE[f.cause]) || f.group === 'power';
+      // Three steps made for it without it shrinking: the car is not what causes it. Stop changing the car.
+      const spent = feet && !f.option ? stepsSpent(f, analysis.findings, trail) : 0;
+      if (spent >= 3) {
+        exhausted.push({ finding: f.title, contested: [], held: true, spent, why: spent + ' changes have been made for this over the last runs and it has not shrunk, so the car is not what causes it.',
+          tips: (DRIVE[f.cause] || DRIVE.power).concat(STA.technique ? STA.technique.forFinding(f) : []).slice(0, 2) });
+        continue;
+      }
       // A suggestion that stands in for a contested one says so.
       const standIn = (s) => { if (contestedHere.length) s.alternativeTo = Array.from(new Set((s.alternativeTo || []).concat(contestedHere))); };
       for (const first of list) {
         if (taken >= 2) break;
         const axle0 = first.axle === '@' ? f.axle : first.axle;
         // The option itself, then the closest equivalents if it cannot be used.
-        const tries = [Object.assign({}, first, { axle: axle0 })].concat(first.lone ? [] : equivalents(first.role, axle0, first.dir));
+        const tries = [Object.assign({}, first, { axle: axle0 })].concat(first.lone ? [] : equivalents(first.role, axle0, first.dir).filter((x) => !f.first || frontAxle(x)));
         let failedWhy = null;
         for (const opt of tries) {
           const axle = opt.axle || null;
           const r = resolve(setup, opt.role, axle, opt.dir, blocked);
           if (!r.params.length) { unavailable.push(r.why); if (r.contested) contestedHere.push(r.why); if (!failedWhy) failedWhy = r.why; continue; }
           const key = opt.role + '|' + (axle || '');
+          // Left out when it would make another part of the corner worse, or has been repeated without effect.
+          // Taking an earlier change back, and the wing-level experiment, are judged on their own terms.
+          // Only balance and traction changes are held back this way: a floor that hits the ground or a
+          // locking wheel still has to be dealt with, so there the side effect is shown with the change.
+          const hm = opt.undo || f.option ? null : harmOf(opt.role, axle, opt.dir, tradable ? f : null, st);
+          if (tradable && !opt.undo && !f.option) {
+            const why = hm ? hm.text : repeatOf(trail, key, opt.dir, f);
+            if (why) {
+              const title = titleFor(opt.role, opt.dir, axle);
+              if (!heldHere.some((h) => h.title === title)) heldHere.push({ title, why, repeat: !hm });
+              if (!failedWhy) failedWhy = title + ' (' + why + ')';
+              continue;
+            }
+          }
           const existing = byKey.get(key);
           if (existing) {
             if (existing.dir === opt.dir && existing.fix) { existing.reasons.push(f.title); existing.findingIds.push(f.id); continue; }
             // Already suggested for this same finding (as a stand-in for an earlier option): do not count it twice.
             if (existing.dir === opt.dir && !existing.fix && existing.findingIds.indexOf(f.id) >= 0) break;
-            if (existing.dir === opt.dir) { existing.reasons.push(f.title); existing.findingIds.push(f.id); existing.score += f.severity * 0.5; standIn(existing); taken++; break; }
+            if (existing.dir === opt.dir) {
+              // The same problem measured another way (see `group` in handling.js) adds a reason, not weight.
+              const sameProblem = f.group && existing.groups.indexOf(f.group) >= 0;
+              existing.reasons.push(f.title); existing.findingIds.push(f.id); if (!sameProblem) existing.score += f.severity * 0.5;
+              if (f.group && !sameProblem) existing.groups.push(f.group);
+              standIn(existing); taken++; break;
+            }
             if (existing.fix) continue; // moving it back inside the limit is not optional
             existing.conflict = (existing.conflict || []).concat(f.title);
             if (f.felt || f.agreed) existing.againstFelt = true;
@@ -441,7 +679,8 @@
           const s = {
             key, blockKey: blockKey(opt.role, axle, opt.dir), role: opt.role, axle, dir: opt.dir, title: change.cappedAt != null ? change.text : titleFor(opt.role, opt.dir, axle),
             amount: change.cappedAt != null ? '' : change.by, targetKey: tk, learned: opt.learned || 0, bigger, paramIds: r.params.map((p) => p.id), current: SU().describe(r.params), change,
-            effect: opt.effect, cost: opt.cost, reasons: [f.title], findingIds: [f.id], confidence: f.confidence, primary: taken === 0,
+            effect: opt.effect, cost: opt.cost, reasons: [f.title], findingIds: [f.id], groups: f.group ? [f.group] : [], primary: taken === 0,
+            confidence: feet && f.confidence === 'high' ? 'medium' : f.confidence, undo: !!opt.undo, sideEffect: hm && !tradable ? hm.text : null,
             insteadOf: opt === tries[0] ? null : failedWhy, score: f.severity * (taken === 0 ? 1 : 0.6),
           };
           standIn(s);
@@ -450,8 +689,10 @@
         }
       }
       if (unavailable.length) skipped.push({ finding: f.title, items: Array.from(new Set(unavailable)) });
-      // Every setup route contested or unavailable: what is left is the driving.
-      if (!taken && contestedHere.length) exhausted.push({ finding: f.title, contested: Array.from(new Set(contestedHere)), tips: STA.technique ? STA.technique.forFinding(f) : [] });
+      if (heldHere.length) held.push({ finding: f.title, items: heldHere });
+      // Every setup route contested, unavailable or ruled out by what it would do elsewhere: what is left is the driving.
+      if (!taken && (contestedHere.length || heldHere.length)) exhausted.push({ finding: f.title, contested: Array.from(new Set(contestedHere)), held: heldHere.length > 0,
+        tips: (DRIVE[f.cause] && f.kind === 'oversteer' ? DRIVE[f.cause] : []).concat(STA.technique ? STA.technique.forFinding(f) : []).slice(0, 3) });
     }
     // The wing-level entry is already built from the lap times on record, so its history is not counted twice.
     for (const s of suggestions) if (!s.fix && !(s.findingIds.length === 1 && s.findingIds[0] === 'pace-wing')) applyHistory(s, opts && opts.outcomes);
@@ -466,7 +707,10 @@
     const tier = (s) => (s.fix ? 3 : s.demoted ? 0 : s.rearFirst ? 0.5 : s.primary ? 2 : 1);
     suggestions.sort((a, b) => tier(b) - tier(a) || b.score - a.score);
     suggestions.forEach((s, i) => { s.rank = i + 1; });
-    return { suggestions, skipped, exhausted, violations, car, note: '', ideas: mine.judged, heldBack: mine.heldBack };
+    // A change left out for one problem but offered for another, or put in as the driver's own idea, is not "left out".
+    const offered = new Set(suggestions.map((s) => s.blockKey + '|' + s.title).concat(suggestions.map((s) => titleFor(s.role, s.dir, s.axle))));
+    for (const h of held) h.items = h.items.filter((i) => !offered.has(i.title));
+    return { suggestions, skipped, exhausted, held: held.filter((h) => h.items.length), driving, violations, car, note: '', ideas: mine.judged, heldBack: mine.heldBack };
   }
 
   /* ---------- the driver's own ideas ---------- */
@@ -576,5 +820,5 @@
     return SU().refresh(c);
   }
 
-  STA.advisor = { advise, judgeIdea, proposeSetup, CONTEST, contestText, ROLE, RULES, buildChange, ruleFor, titleFor, labelFor, equivalents, resolve, blockKey };
+  STA.advisor = { advise, judgeIdea, proposeSetup, CONTEST, contestText, ROLE, RULES, SHIFT, DRIVE, shiftOf, stateOf, harmOf, buildChange, ruleFor, titleFor, labelFor, equivalents, resolve, blockKey };
 })(typeof window !== 'undefined' ? window : globalThis);

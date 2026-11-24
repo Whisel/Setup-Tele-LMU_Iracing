@@ -94,8 +94,9 @@
     }
     for (const x of felt) if (!used.has(x) && x.kind !== 'balanced') findings.push(x);
     // Understeer is cured only from the front where the rear also slides in the same part of the
-    // corner; a measured slide anywhere keeps the flag the telemetry gave it.
-    const loose = findings.filter((f) => f.kind === 'oversteer');
+    // corner; a measured slide anywhere keeps the flag the telemetry gave it. A rear that only
+    // steps out on the throttle does not count: the advisor's side-effect check covers that.
+    const loose = findings.filter((f) => f.kind === 'oversteer' && f.cause !== 'power');
     for (const f of findings) {
       if (f.kind !== 'understeer') continue;
       if (f.felt) f.rearFirst = loose.some((o) => o.phase === f.phase && overlap(o, f));

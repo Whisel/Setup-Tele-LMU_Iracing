@@ -327,15 +327,88 @@ setup that was on the car.
   "understeer" on cars that were loose, and changes that made them looser. On a public
   recording of a prototype whose rear slides for 46% of slow-corner exits, the old
   reading led with "soften the front bar, move brake bias rearward, take off rear wing,
-  stiffen the rear bar"; the new one leads with traction control and a softer rear bar.
-- **The rear comes first.** When the rear slides anywhere in the corner, understeer found
-  alongside it is ranked below it and marked "after the rear is settled". For that
-  understeer only front-end changes that do not take load or stability from the rear
-  are offered (front camber, toe, pressures, dampers, front wing): no bars, springs,
-  rear wing, differential or brake bias.
+  stiffen the rear bar"; the current one leads with traction control and rear toe-in
+  (see the next section for why not the rear bar).
+- **A rear that is loose on its own comes first.** When the rear slides on the brakes,
+  off the pedals or at steady throttle, understeer found alongside it is ranked below it
+  and marked "after the rear is settled". For that understeer only front-end changes that
+  do not take load or stability from the rear are offered (front camber, toe, pressures,
+  dampers, front wing): no bars, springs, rear wing, differential or brake bias.
+- **A rear that only steps out on the throttle does not.** See the next section.
 - **Le Mans Ultimate, and files without those channels.** The older steering-only reading
   is still used there, so treat an "understeer" finding on a car that feels loose with
   suspicion and contest the change.
+
+## Keeping one fix from causing the next problem
+
+Following the advice run after run used to walk a car into understeer: a slide on exit
+was answered with a softer rear bar, the slide was still there next run (because it came
+from the throttle), so the bar was softened again, and any understeer earlier in the corner
+was held back "until the rear is settled". Three checks now stop that.
+
+**1. Why the rear slides.** Every moment the rear lets go is filed by what the driver's
+feet were doing: on the throttle, on the brakes, or off both pedals. On the three real
+iRacing recordings used to check this (a Ligier JS P320, a BMW M Hybrid V8 and an FIA F4),
+88–100% of the sliding on the exit of slow and medium corners was above half throttle,
+with the rear wheels turning over 4% faster than the fronts in 85–100% of it; none of it
+was off the throttle. That is power oversteer: the tyres are asked for cornering and
+drive at once.
+
+- The finding says so: "It starts on the throttle: 100% of it is with the throttle on. A
+  slide typically begins at 75% throttle with 21% of the corner's steering still on."
+- **Start with the driving** is shown above the changes, with what to do from the seat.
+- The changes offered for it are the ones that act only under power: traction control,
+  rear slow bump damping, rear toe-in, the power side of the differential, rear camber
+  and pressure. The rear bar and springs come last in that list.
+- Exit oversteer on the throttle, wheelspin and a busy traction control are the same
+  problem measured three ways. They used to add up, which is what pushed "soften the rear
+  bar" to the top. They now count once.
+- **Understeer earlier in the corner comes first** on such a car, and is cured from the
+  front axle alone (front bar and springs included). A driver waiting on a front that
+  pushes still has steering on when the power goes down, and that is what turns the car.
+  Ross Bentley describes exactly this ("the understeer is a car problem, and the oversteer
+  was caused by the driver"), and HP Academy's alignment notes list exit oversteer as often
+  the result of entry or mid-corner understeer.
+- A slide on the brakes or as the driver lifts is answered with what acts off the
+  throttle (brake bias, engine braking, the coast side of the differential, rear rebound),
+  even when it carries on to the middle of the corner.
+
+**2. Where a setting acts.** Bars and springs decide how the load is shared between the
+axles for as long as the car is cornering, so they move the balance in every part of the
+corner. Dampers only act while the car is still rolling or pitching: the way in and the
+way out. Brake bias and engine braking act on the way in. The app holds this as a small
+table (`SHIFT` in `js/analysis/advisor.js`) and checks every change against the balance
+measured in the other parts of the corner:
+
+- A change that would add understeer where the front already pushes, loosen the rear
+  where it already slides, or take traction from a rear that steps out on the throttle is
+  **left out on purpose**, and listed under the changes with the reason ("Soften the rear
+  anti-roll bar: would add understeer mid-corner, where the front already pushes (+41%)").
+- The check is relative: a serious problem can still be bought with a small cost elsewhere.
+- What you felt counts as much as what was measured.
+- A floor that hits the ground or a locking wheel still has to be fixed, so those changes
+  are kept and the side effect is shown on them instead. They are not ticked by default.
+- If you want a left-out change anyway, add it as your own idea: it is weighed against
+  what it costs and listed as yours.
+
+**3. What has already been tried.** From the sessions in the library (same car, same
+track, in the order they were driven) the app works out how each setting has moved:
+
+- The same change is **not offered a third time in a row** when the problem it is for has
+  not shrunk by a third since before the first. The next route is offered instead.
+- A change made earlier is **offered back** when the part of the corner it pushes on has
+  got worse since ("Rear anti-roll bar went from 4 to 2, and since then mid-corner
+  understeer has gone from +10% to +41%"). This comes before anything new.
+- For a slide that starts with the driver's feet, **three steps without it shrinking** end
+  the setup changes for it: the app says the car is not what causes it and gives the
+  driving advice instead.
+
+On the P320 recording the advice went from "raise traction control, soften the rear bar,
+add front camber" to "soften the front bar, raise traction control", with the rear bar
+left out for the reason above. In the test suite a simulated driver who always gets on the
+throttle too early follows the ticked changes run after run: the front bar is softened
+twice (the push mid-corner goes from 63% to nothing), traction control raised twice, rear
+toe once, and on the fourth run the app stops changing the car.
 
 ## Car limits
 
@@ -662,6 +735,15 @@ the last value in the file; with no pit reading they are left out rather than gu
   with heavy downforce is driven differently from a road-based one.
 - **The advice is general.** It has no per-car targets for tyre pressures, temperatures or
   ride heights, and it cannot tell you the lap time a change is worth.
+- **Where a setting acts is a general table, not a model of your car.** The sizes in it
+  are rules of thumb agreed by the usual references, not measurements, and three kinds of
+  setting are left out because their direction depends on the car (tyre pressure, the
+  power side of the differential, traction control). The thresholds for "starts on the
+  throttle" (three quarters of the sliding with the throttle on) and for stopping (two
+  steps of one setting, three steps in all) were set from three real iRacing recordings
+  and a simulation; none of this has been checked on a run of your own sessions yet.
+- **Le Mans Ultimate has no slip-angle channels**, so the cause of oversteer there is read
+  from the pedals at the moments the steering shows it, which is coarser.
 
 ## Tests
 

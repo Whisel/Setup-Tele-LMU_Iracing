@@ -61,7 +61,10 @@
     const near = timed.filter((t) => t <= timed[0] * 1.03);
     const out = { v: 4, prof: STA.pace ? STA.pace.profile(session, an && an.balance ? an.balance.gmax : null) : null, medianLap: near.length ? U.median(near) : null, lapSpread: near.length >= 3 ? U.std(near) : null, findings: [], balance: null, metrics: {}, habits: [] };
     if (!an) return out;
-    out.findings = an.findings.map((f) => ({ id: f.id, kind: f.kind, phase: f.phase, band: f.band, axle: f.axle, title: f.title, severity: +f.severity.toFixed(3) }));
+    // raw: the severity before it was scaled down for coming second to another problem. cause and
+    // withSlide pick the rule list (see advisor.ruleFor), so a later session can tell what a change was for.
+    out.findings = an.findings.map((f) => Object.assign({ id: f.id, kind: f.kind, phase: f.phase, band: f.band, axle: f.axle, title: f.title, severity: +f.severity.toFixed(3) },
+      f.raw != null ? { raw: +f.raw.toFixed(3) } : null, f.cause ? { cause: f.cause } : null, f.withSlide ? { withSlide: true } : null));
     out.tendencies = out.findings; // name used by the baseline builder
     if (an.balance) {
       out.balance = {};
@@ -326,6 +329,32 @@
     return out.sort((a, b) => (a.after.recordedAt || 0) - (b.after.recordedAt || 0));
   }
 
+  /* How each setting has moved over the sessions leading up to this one, same car and track:
+       "role|axle" -> { role, axle, dir, n, from, to, then, when }
+     n counts changes the same way in a row (a change the other way starts the count again), from and
+     to are the values before the first and after the last of them, and `then` is the record of the
+     session before the first. Only sessions up to this one count, so looking back at an older run
+     is not answered with what came later. The advisor uses it to stop repeating a change that is
+     not working and to offer one back when the car has got worse since (advisor.js). */
+  function trail(summaries, setups, session) {
+    const out = new Map();
+    if (!session || !session.setup) return out;
+    const byId = new Map(setups.map((s) => [s.id, s]));
+    const q = { sim: session.meta.sim, car: session.meta.car, track: session.trackName };
+    const mine = summaries.filter((s) => s.sim === q.sim && STA.library.sameCar(s.car, q.car) && STA.library.sameTrack(s.track, q.track) && s.setupId && byId.has(s.setupId))
+      .sort((a, b) => (a.recordedAt || 0) - (b.recordedAt || 0));
+    const at = mine.findIndex((s) => s.id === session.id);
+    for (let i = 1; i <= at; i++) {
+      if (mine[i].setupId === mine[i - 1].setupId) continue;
+      for (const c of changesBetween(byId.get(mine[i - 1].setupId), byId.get(mine[i].setupId))) {
+        const k = c.role + '|' + (c.axle || ''), e = out.get(k);
+        if (e && e.dir === c.dir) { e.n++; e.to = c.to; }
+        else out.set(k, { role: c.role, axle: c.axle, dir: c.dir, n: 1, from: c.from, to: c.to, then: mine[i - 1], when: mine[i].recordedAt || 0 });
+      }
+    }
+    return out;
+  }
+
   const runs = (n) => (n === 1 ? '1 run' : n + ' runs');
   const sure = (n, clean) => (n >= 4 && clean ? 'high' : n >= 2 ? 'medium' : 'low');
 
@@ -431,5 +460,5 @@
     return { before, after, setupBefore: a, setupAfter: b, changes: j.changes, lap: j.lap, bonus: j.bonus, pace: j.pace, sessions: mine.length, choices: intentChoices(before), feltBefore: !!(feel && feel[before.id] && feel[before.id].felt && feel[before.id].felt.length), feltAfter: !!(feel && feel[after.id] && feel[after.id].felt && feel[after.id].felt.length) };
   }
 
-  STA.learning = { snapshot, changesBetween, addresses, judge, pairs, outcomes, knowledge, review, intentChoices, targetKey, targetText };
+  STA.learning = { snapshot, changesBetween, addresses, judge, pairs, trail, outcomes, knowledge, review, intentChoices, targetKey, targetText };
 })(typeof window !== 'undefined' ? window : globalThis);

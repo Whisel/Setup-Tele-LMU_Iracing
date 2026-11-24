@@ -90,6 +90,8 @@ function drive(opts) {
     let rear = 4 * Math.min(1, Math.abs(a) / 1.9);
     const slowCorner = out.v[j] < 28 && Math.abs(a) > 1.0;
     if (opts.looseExit && slowCorner && out.ax[j] > 0.3) { rear += 7 * opts.looseExit; s -= Math.sign(a) * RATIO * 7 * opts.looseExit; }
+    // opts.looseEntry: the rear slides on the way into slow corners, while the car is still slowing down.
+    if (opts.looseEntry && out.v[j] < 40 && Math.abs(a) > 1.0 && out.ax[j] < -0.5) { rear += 7 * opts.looseEntry; s -= Math.sign(a) * RATIO * 7 * opts.looseEntry; }
     yawRate[j] = out.v[j] * out.kap[j]; velX[j] = out.v[j];
     velY[j] = ARM * yawRate[j] - Math.tan(rear * RAD * Math.sign(a)) * out.v[j];
     steer[j] = s;
@@ -98,7 +100,7 @@ function drive(opts) {
     gear[j] = Math.max(1, Math.min(6, 1 + Math.floor(out.v[j] / 14)));
     rpm[j] = 3500 + ((out.v[j] % 14) / 14) * 4000;
   }
-  return { track, hz: opts.hz, n: m, t: out.t, dist: out.dist, lap: out.lap, speed: out.v, x: out.x, y: out.y, longAccel: out.ax, latG, steer, thr, brk, gear, rpm, yawRate, velX, velY, slip: !!opts.slip || !!opts.looseExit,
+  return { track, hz: opts.hz, n: m, t: out.t, dist: out.dist, lap: out.lap, speed: out.v, x: out.x, y: out.y, longAccel: out.ax, latG, steer, thr, brk, gear, rpm, yawRate, velX, velY, slip: !!opts.slip || !!opts.looseExit || !!opts.looseEntry,
     lastLap: out.lastLap, trueLaps, cross, length };
 }
 
