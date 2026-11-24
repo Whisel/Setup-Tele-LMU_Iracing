@@ -44,13 +44,32 @@
       return arr.every(Boolean) ? arr : null;
     };
     /* Tyre temperatures: on the left side of the car the tyre's left edge is the
-       outer edge; on the right side it is the inner edge. Prefer carcass temps. */
+       outer edge; on the right side it is the inner edge. iRacing records two sets:
+       surface temperatures (tempL/M/R), which change all the time on track, and
+       carcass temperatures (tempCL/CM/CR), which in the files checked so far only
+       change in the pits. Use the surface set when it moves on track; otherwise
+       fall back to whichever set the file has. */
+    const changes = (a) => { if (!a) return 0; let c = 0; for (let i = 1; i < a.length; i += 1) if (a[i] !== a[i - 1]) c++; return c; };
+    const surfLive = ['LF', 'RF', 'LR', 'RR'].every((w) => changes(v(w + 'tempM')) > Math.max(50, n * 0.02));
     const temps = (pos) => {
-      const pick = (w, side) => f32(v(w + 'tempC' + side)) || f32(v(w + 'temp' + side));
+      const pick = (w, side) => (surfLive ? f32(v(w + 'temp' + side)) : f32(v(w + 'tempC' + side)) || f32(v(w + 'temp' + side)));
       const map = { I: { LF: 'R', RF: 'L', LR: 'R', RR: 'L' }, M: { LF: 'M', RF: 'M', LR: 'M', RR: 'M' }, O: { LF: 'L', RF: 'R', LR: 'L', RR: 'R' } }[pos];
       const arr = ['LF', 'RF', 'LR', 'RR'].map((w) => pick(w, map[w]));
       return arr.every(Boolean) ? arr : null;
     };
+    /* The carcass readings iRacing takes when the car stops in the pits (or is reset):
+       one entry each time they change, as inner/middle/outer per wheel (FL, FR, RL, RR). */
+    const tyreReadings = [];
+    if (surfLive && ['LF', 'RF', 'LR', 'RR'].every((w) => v(w + 'tempCL') && v(w + 'tempCM') && v(w + 'tempCR'))) {
+      const c = {}; for (const w of ['LF', 'RF', 'LR', 'RR']) for (const x of ['L', 'M', 'R']) c[w + x] = v(w + 'tempC' + x);
+      const at = (i) => ['LF', 'RF', 'LR', 'RR'].map((w) => {
+        const left = w[0] === 'L';
+        return { inner: c[w + (left ? 'R' : 'L')][i], mid: c[w + 'M'][i], outer: c[w + (left ? 'L' : 'R')][i] };
+      });
+      const key = (i) => Object.keys(c).map((k) => c[k][i]).join(',');
+      let last = key(0); tyreReadings.push({ i: 0, rows: at(0) });
+      for (let i = 1; i < n; i++) { const k = key(i); if (k !== last) { last = k; tyreReadings.push({ i, rows: at(i) }); } }
+    }
 
     const ch = {
       t, speed: f32(v('Speed')), throttle: f32(v('Throttle')), throttleRaw: f32(v('ThrottleRaw')), brake: f32(v('Brake')), clutch: f32(v('Clutch')),
@@ -108,12 +127,14 @@
       sessionType: sessType, recordedAt: ibt.header.startDate ? ibt.header.startDate * 1000 : (file && file.lastModified) || Date.now(),
       trackLenHint: trackLen, maxRpm: parseFloat(di.DriverCarRedLine) || null, steerUnit: 'deg',
       setupName: di.DriverSetupName || '', airTemp: wk.TrackAirTemp || '', trackTemp: wk.TrackSurfaceTemp || '',
-      tyreNote: 'iRacing only refreshes tyre temperature, pressure and wear readings when the car is in the pits, so tyre values reflect the end of a run.',
+      tyreLive: surfLive,
+      tyreNote: surfLive ? 'Tyre surface temperatures, which iRacing records all the way round the lap. Pressures and wear only refresh in the pits.'
+        : 'This recording only has tyre readings that refresh in the pits, so tyre values reflect the end of a run.',
     };
     const setup = info.CarSetup ? STA.setup.fromIracing(info.CarSetup, {
       car: meta.car, carClass: meta.carClass, track: trackName(meta), name: cleanSetupName(meta.setupName) || runName(meta.recordedAt),
     }) : null;
-    return finalize({ meta, hz, n, ch, marks, breaks, setup, warnings: setup ? [] : ['This recording holds no setup, so the Setup advice tab is hidden for it.'] });
+    return finalize({ meta, hz, n, ch, marks, breaks, setup, tyreReadings, warnings: setup ? [] : ['This recording holds no setup, so the Setup advice tab is hidden for it.'] });
   }
 
   /* Name for a setup that only exists inside a telemetry file. */
