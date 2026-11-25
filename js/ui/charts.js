@@ -365,5 +365,5 @@
     }
   };
 
-  STA.charts = { TraceStack, TrackMap, css };
+  STA.charts = Object.assign(STA.charts || {}, { TraceStack, TrackMap, css, fitCanvas });
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -20,6 +20,17 @@
    works at. Oversteer is reported from how often that happens, not from an average, so
    a car that steps out and is caught shows up even when most of the corner is tidy.
 
+   Why the rear slides. Every sample where the rear lets go is filed by what the driver's
+   feet were doing: on the throttle, on the brakes, or off both pedals. A rear that only
+   steps out on the throttle (power oversteer) is a different problem from one that is
+   loose on its own: the tyres are being asked for cornering and drive at once, and the
+   cure is in the throttle, the traction control and the settings that act only under
+   power, not in the balance of the whole corner. When the front also pushes earlier in
+   the corner, that comes first: a driver waiting on a pushing front still has steering on
+   when the power goes down, which is what turns the car (Ross Bentley, "The dreaded
+   understeer/oversteer problem"; HP Academy's alignment notes say the same of exit
+   oversteer: often the result of entry or mid-corner understeer).
+
    Everything else (wheel speeds, tyre temperatures, ride height, brakes,
    gearing) is used when the file has the channel and skipped when it does not.
 
@@ -78,8 +89,12 @@
         if (K2 > 0 && C2 > -0.5 * sRef / Math.max(gmax, 0.1)) { K = K2; C = C2; }
       }
       if (K > 0 && nLin > 100) {
+        const US = 0.25, OS = -0.10;
         const cells = {}, perCorner = {};
         const add = (key, v) => (cells[key] = cells[key] || []).push(v);
+        // What the driver's feet were doing: 0 over half throttle, 1 part throttle, 2 off both pedals, 3 braking.
+        const pedalOf = (g, i) => { const th = (g.throttleRaw || g.throttle)[i]; return g.brake && g.brake[i] > 0.1 ? 3 : th >= 0.5 ? 0 : th >= 0.1 ? 1 : 2; };
+        const feet = {}, feetAdd = (key, pd) => { (feet[key] = feet[key] || [0, 0, 0, 0])[pd]++; };
         let counter = 0, nearLimit = 0;
         const haveSlip = !!(grids[0].velX && grids[0].velY && grids[0].yawRate), slip = [];
         const counterBy = { entry: 0, mid: 0, exit: 0 }, nearBy = { entry: 0, mid: 0, exit: 0 };
@@ -87,6 +102,8 @@
           corners.forEach((c, ci) => {
             const st = S().cornerStats(g, c, ci > 0 ? corners[ci - 1].b : null);
             const half = Math.max(Math.round(8 / g.step), Math.round(0.12 * (c.b - c.a)));
+            let steerPk = 0; for (let i = c.a; i <= c.b; i++) if (Math.abs(g.steer[i]) > steerPk) steerPk = Math.abs(g.steer[i]);
+            const w = g.wheelSpeed;
             for (let i = c.a; i <= c.b; i++) {
               const v = g.speed[i], a = g.latG[i];
               if (!(v > 8) || Math.abs(a) < 0.5 * gmax) continue;
@@ -96,8 +113,12 @@
               add(ph + '|' + c.band, e); add(ph, e);
               const pk = c.name + '|' + ph; (perCorner[pk] = perCorner[pk] || []).push(e);
               nearLimit++; nearBy[ph]++;
-              if (g.steer[i] * sg < -0.03 * sRef) { counter++; counterBy[ph]++; }
-              if (haveSlip) slip.push({ ph, band: c.band, name: c.name, lap: g.lapIdx,
+              const pd = pedalOf(g, i);
+              if (g.steer[i] * sg < -0.03 * sRef) { counter++; counterBy[ph]++; feetAdd('counter|' + ph, pd); }
+              if (e <= OS) { feetAdd(ph + '|' + c.band, pd); feetAdd(ph, pd); }
+              if (haveSlip) slip.push({ ph, band: c.band, name: c.name, lap: g.lapIdx, pd,
+                th: (g.throttleRaw || g.throttle)[i], steerOn: steerPk > 0 ? Math.abs(g.steer[i]) / steerPk : 0,
+                spin: !!(w && pd < 2 && w[2][i] + w[3][i] > 1.04 * (w[0][i] + w[1][i])),
                 rear: Math.atan2(REAR_ARM * g.yawRate[i] - g.velY[i], Math.max(1, g.velX[i])) * (180 / Math.PI) * sg,
                 gap: (g.steer[i] - K * g.yawRate[i] / v) * sg });
             }
@@ -111,6 +132,20 @@
         out.balance = { K, C, steerRef: sRef, gmax, linearSamples: nLin, matrix, cornerIdx, counterShare: nearLimit ? counter / nearLimit : 0,
           counterBy: { entry: nearBy.entry ? counterBy.entry / nearBy.entry : 0, mid: nearBy.mid ? counterBy.mid / nearBy.mid : 0, exit: nearBy.exit ? counterBy.exit / nearBy.exit : 0 } };
 
+        /* Why the rear lets go, from where the driver's feet were (see the top of this file).
+           feet = [over half throttle, part throttle, off both pedals, braking], counted over the sliding. */
+        const pc = (x) => Math.round(x * 100) + '%';
+        const causeOf = (p, extra) => {
+          const n = p ? p[0] + p[1] + p[2] + p[3] : 0;
+          if (n < 8) return { cause: 'balance', text: '' };
+          const on = (p[0] + p[1]) / n;
+          if (on >= 0.75) return { cause: 'power', share: on, text: 'It starts on the throttle: ' + pc(on) + ' of it is with the throttle on' + (p[0] / n >= 0.5 ? ' (' + pc(p[0] / n) + ' over half throttle)' : '')
+            + (extra && extra.spin >= 0.5 ? ', the rear wheels spinning' : '') + (extra && extra.th != null ? '. A slide typically begins at ' + pc(extra.th) + ' throttle with ' + pc(extra.steerOn) + ' of the corner\'s steering still on' : '') + '.' };
+          if (p[3] / n >= 0.5) return { cause: 'braking', share: p[3] / n, text: pc(p[3] / n) + ' of it is on the brakes.' };
+          if (p[2] / n >= 0.5) return { cause: 'lift', share: p[2] / n, text: pc(p[2] / n) + ' of it is with both pedals released.' };
+          return { cause: 'balance', text: '' };
+        };
+
         /* Rear sliding, measured (see the top of this file). */
         let slide = null;
         if (slip.length >= 200) {
@@ -120,22 +155,32 @@
           const cellsS = {}, byCorner = {};
           for (const o of slip) {
             const hit = isSlide(o) ? 1 : 0;
-            for (const key of [o.ph, o.ph + '|' + o.band]) { const cS = cellsS[key] || (cellsS[key] = { n: 0, hits: 0, peak: 0 }); cS.n++; cS.hits += hit; if (hit && o.rear > cS.peak) cS.peak = o.rear; }
             const ck = o.ph + '|' + o.name, bc = byCorner[ck] || (byCorner[ck] = { band: o.band, laps: {} });
-            const L = bc.laps[o.lap] || (bc.laps[o.lap] = { n: 0, hits: 0 }); L.n++; L.hits += hit;
+            const L = bc.laps[o.lap] || (bc.laps[o.lap] = { n: 0, hits: 0 });
+            for (const key of [o.ph, o.ph + '|' + o.band]) {
+              const cS = cellsS[key] || (cellsS[key] = { n: 0, hits: 0, peak: 0, feet: [0, 0, 0, 0], spin: 0, th: [], steerOn: [] });
+              cS.n++; cS.hits += hit;
+              if (!hit) continue;
+              if (o.rear > cS.peak) cS.peak = o.rear;
+              cS.feet[o.pd]++; if (o.spin) cS.spin++;
+              if (!L.hits) { cS.th.push(o.th); cS.steerOn.push(o.steerOn); } // the first sliding sample in this corner on this lap
+            }
+            L.n++; L.hits += hit;
           }
+          const slideCause = (key) => { const cS = cellsS[key]; return causeOf(cS.feet, { spin: cS.hits ? cS.spin / cS.hits : 0, th: cS.th.length ? U.median(cS.th) : null, steerOn: cS.steerOn.length ? U.median(cS.steerOn) : 0 }); };
           // A corner counts when the rear slides there on at least half of the laps.
           const repeatIn = (ph, band) => Object.keys(byCorner).filter((k) => k.indexOf(ph + '|') === 0 && (!band || byCorner[k].band === band)).filter((k) => {
             const per = Object.values(byCorner[k].laps); return per.filter((L) => L.n >= 4 && L.hits / L.n >= 0.15).length >= Math.max(1, Math.ceil(laps.length / 2));
           }).map((k) => k.split('|')[1]);
           slide = { ref, cells: cellsS, share: (key) => (cellsS[key] && cellsS[key].n >= 40 ? cellsS[key].hits / cellsS[key].n : null), repeatIn };
           out.balance.slide = { rearSlipRef: ref, by: Object.fromEntries(PHASES.map((ph) => [ph, slide.share(ph)])),
-            cells: Object.fromEntries(Object.keys(cellsS).map((k) => [k, { n: cellsS[k].n, share: cellsS[k].hits / cellsS[k].n, peak: cellsS[k].peak }])) };
+            cells: Object.fromEntries(Object.keys(cellsS).map((k) => [k, { n: cellsS[k].n, share: cellsS[k].hits / cellsS[k].n, peak: cellsS[k].peak, feet: cellsS[k].feet, cause: slideCause(k).cause }])) };
           for (const ph of PHASES) for (const b of BANDS) {
             const share = slide.share(ph + '|' + b), where = repeatIn(ph, b);
             if (share == null || !(share >= 0.08 || (share >= 0.05 && where.length >= 1) || where.length >= 2)) continue;
+            const why = slideCause(ph + '|' + b);
             out.findings.push({
-              id: 'os-' + ph + '-' + b, kind: 'oversteer', phase: ph, band: b, area: 'Balance', measured: true,
+              id: 'os-' + ph + '-' + b, kind: 'oversteer', phase: ph, band: b, area: 'Balance', measured: true, cause: why.cause, causeText: why.text,
               title: PHASE_TEXT[ph] + ' oversteer in ' + BAND_TEXT[b],
               detail: 'Rear slides: at a bigger slip angle than the front for ' + Math.round(share * 100) + '% of the time near the limit (rear up to ' + cellsS[ph + '|' + b].peak.toFixed(0) + '°, normally ' + ref.toFixed(0) + '°).',
               evidence: (where.length ? 'Repeats in ' + where.join(', ') + '. ' : '') + lapWord + '.',
@@ -144,7 +189,6 @@
           }
         }
 
-        const US = 0.25, OS = -0.10;
         for (const ph of PHASES) {
           for (const b of BANDS) {
             const m = matrix[ph][b];
@@ -161,8 +205,9 @@
               });
             } else if (m.idx <= OS && !out.findings.some((f) => f.id === 'os-' + ph + '-' + b)) {
               const worst = names.filter((c) => cornerIdx[c.name + '|' + ph] <= OS).map((c) => c.name);
+              const why = causeOf(feet[ph + '|' + b]);
               out.findings.push({
-                id: 'os-' + ph + '-' + b, kind: 'oversteer', phase: ph, band: b, area: 'Balance',
+                id: 'os-' + ph + '-' + b, kind: 'oversteer', phase: ph, band: b, area: 'Balance', cause: why.cause, causeText: why.text,
                 title: PHASE_TEXT[ph] + ' oversteer in ' + BAND_TEXT[b],
                 detail: 'Rear rotates the car: ' + Math.round(-m.idx * 100) + '% less steering than the car needs at the limit.',
                 evidence: (worst.length ? 'Worst in ' + worst.join(', ') + '. ' : '') + lapWord + '.',
@@ -180,7 +225,8 @@
             const counts = { low: 0, medium: 0, high: 0 }; list.forEach((c) => counts[c.band]++);
             const band = BANDS.reduce((a, b) => (counts[b] > counts[a] ? b : a), 'low');
             const mean = U.mean(list.map((c) => cornerIdx[c.name + '|' + ph]));
-            out.findings.push({
+            const why = kind === 'oversteer' ? causeOf(feet[ph]) : null;
+            out.findings.push(Object.assign(why ? { cause: why.cause, causeText: why.text } : {}, {
               id: (kind === 'understeer' ? 'us-' : 'os-') + ph + '-' + band, kind, phase: ph, band, area: 'Balance',
               title: PHASE_TEXT[ph] + ' ' + kind + ' in ' + list.map((c) => c.name).join(', '),
               detail: kind === 'understeer'
@@ -188,28 +234,49 @@
                 : 'Rear rotates the car here: about ' + Math.round(-mean * 100) + '% less steering than the car needs.',
               evidence: 'Other corners are near neutral in this phase. ' + lapWord + '.',
               severity: U.clamp(Math.abs(mean) / 0.7, 0.2, 0.8), confidence: baseConf, corners: list.map((c) => c.name),
-            });
+            }));
           }
         }
         for (const ph of PHASES) {
           const share = out.balance.counterBy[ph];
           if (!slide && share >= 0.03 && !out.findings.some((f) => f.kind === 'oversteer' && f.phase === ph)) {
+            const why = causeOf(feet['counter|' + ph]);
             out.findings.push({
-              id: 'os-counter-' + ph, kind: 'oversteer', phase: ph, band: 'low', area: 'Balance',
+              id: 'os-counter-' + ph, kind: 'oversteer', phase: ph, band: 'low', area: 'Balance', cause: why.cause, causeText: why.text,
               title: PHASE_TEXT[ph] + ' oversteer (opposite lock)',
               detail: 'On opposite lock for ' + (share * 100).toFixed(1) + '% of the time near the limit.',
               evidence: lapWord + '.', severity: U.clamp(share / 0.1, 0.2, 1), confidence: baseConf, corners: [],
             });
           }
         }
+        /* Which end comes first when both misbehave.
+           A rear that is loose on its own (on the brakes, off the pedals, at steady throttle) comes
+           before any understeer, and nothing offered for the front may loosen it further.
+           A rear that only steps out on the throttle is the other way round: understeer earlier in
+           the corner comes first, and is cured from the front axle alone. */
         const loose = out.findings.filter((f) => f.kind === 'oversteer');
-        if (loose.length) for (const f of out.findings) {
-          if (f.kind !== 'understeer') continue;
+        const own = loose.filter((f) => f.cause !== 'power'), onPower = loose.filter((f) => f.cause === 'power');
+        const pushes = out.findings.filter((f) => f.kind === 'understeer');
+        for (const f of pushes) f.raw = f.severity;
+        if (own.length) for (const f of pushes) {
           f.rearFirst = true;
-          const same = loose.some((x) => x.phase === f.phase);
+          const same = own.some((x) => x.phase === f.phase);
           // Always ranked below the sliding rear itself.
-          f.severity = +Math.min(f.severity * (same ? 0.4 : 0.7), 0.8 * Math.max.apply(null, loose.map((x) => x.severity))).toFixed(3);
+          f.severity = +Math.min(f.severity * (same ? 0.4 : 0.7), 0.8 * Math.max.apply(null, own.map((x) => x.severity))).toFixed(3);
           f.evidence += ' The rear also slides ' + (same ? 'in this part of the corner' : 'elsewhere in the corner') + ': settle the rear first. Only front-end changes are offered for this.';
+        } else if (onPower.length) {
+          const early = pushes.filter((f) => f.phase !== 'exit');
+          for (const f of pushes) {
+            f.first = true;
+            f.evidence += f.phase === 'exit' ? ' The rear also steps out on the throttle here, so only front-axle changes are offered for this.'
+              : ' The rear only steps out on the throttle, so this comes first: a front that pushes leaves steering on when the power goes down. Only front-axle changes are offered for it.';
+          }
+          if (early.length) for (const f of onPower) {
+            if (f.phase === 'entry') continue;
+            f.follows = early.map((x) => x.id); f.raw = f.severity;
+            f.severity = +(f.severity * 0.6).toFixed(3);
+            f.causeText += ' The front also pushes earlier in the corner (' + early[0].title.replace(/^./, (c) => c.toLowerCase()) + '): cure that first and this often goes with it.';
+          }
         }
       } else out.notes.push('Not enough gentle cornering in these laps to calibrate steering against cornering, so balance could not be judged from steering.');
     } else out.notes.push('No steering or lateral G channel, so balance could not be judged.');
@@ -296,24 +363,34 @@
 
     /* ---------- tyres ---------- */
     if (ch.tyreTempI && ch.tyreTempM && ch.tyreTempO) {
+      /* LMU's tyre temperatures move slowly and sit close to the carcass, so they are averaged
+         over the laps. iRacing's surface temperatures swing too much for the camber and pressure
+         rules of thumb, which are written for carcass readings: those come from the readings
+         iRacing takes in the pits after the run (see tyres.js). */
+      const info = STA.tyres ? STA.tyres.analyse(session, out.laps) : null;
+      out.tyreTemps = info;
       const live = session.meta.sim === 'lmu';
+      const reading = !live && session.meta.tyreLive ? (info && info.reading) || null : null;
+      const skip = !live && session.meta.tyreLive && !reading;
       const val = (name, w) => {
-        if (!live) { // iRacing: readings only refresh in the pits; use the last value in the file
+        if (reading) { const r = reading.rows[w]; return name === 'tyreTempI' ? r.inner : name === 'tyreTempM' ? r.mid : name === 'tyreTempO' ? r.outer : NaN; }
+        if (!live) { // readings only refresh in the pits; use the last value in the file
           const a = ch[name][w]; return a[a.length - 1];
         }
         let s = 0, n = 0;
         for (const g of grids) { const a = g[name][w]; for (let i = 0; i < g.n; i += 4) { if (a[i] === a[i]) { s += a[i]; n++; } } }
         return n ? s / n : NaN;
       };
-      const rows = STA.WHEELS.map((name, w) => {
+      if (skip) out.notes.push('iRacing took no tyre readings in the pits after these laps, so camber and pressure advice from tyre temperatures is left out. Stop in your pit box after a run to get them.');
+      const rows = skip ? null : STA.WHEELS.map((name, w) => {
         const inner = val('tyreTempI', w), mid = val('tyreTempM', w), outer = val('tyreTempO', w);
-        const press = ch.tyrePress ? val('tyrePress', w) : null;
+        const press = ch.tyrePress ? (reading ? ch.tyrePress[w][Math.max(0, reading.i - 1)] : val('tyrePress', w)) : null;
         return { wheel: name, inner, mid, outer, avg: (inner + mid + outer) / 3, spread: inner - outer, crown: mid - (inner + outer) / 2, press };
       });
-      const warm = rows.every((r) => r.avg > 40);
-      out.tyres = { rows, live, warm, note: live ? 'Surface temperatures averaged over the analysed laps.' : session.meta.tyreNote };
-      if (warm) {
-        const tConf = live ? baseConf : 'low';
+      const warm = !skip && rows.every((r) => r.avg > 40);
+      if (!skip) out.tyres = { rows, live, warm, reading: !!reading, note: live ? 'Tyre temperatures averaged over the analysed laps.' : reading ? 'Carcass temperatures iRacing took in the pits after lap ' + reading.afterLap + '.' : session.meta.tyreNote };
+      if (skip) { /* nothing more from the tyres here */ } else if (warm) {
+        const tConf = live ? baseConf : reading ? 'medium' : 'low';
         for (const [axle, a, b] of [['front', 0, 1], ['rear', 2, 3]]) {
           const spread = (rows[a].spread + rows[b].spread) / 2, crown = (rows[a].crown + rows[b].crown) / 2;
           if (spread > 16) out.findings.push({ id: 'camber-much-' + axle, kind: 'camberTooMuch', axle, area: 'Tyres', title: 'Too much negative camber, ' + axle,
@@ -336,6 +413,7 @@
           }
         }
       } else out.notes.push('Tyres were not up to temperature in these laps, so tyre-based advice is left out.');
+      if (info) for (const f of STA.tyres.findings(info)) out.findings.push(f);
     }
 
     /* ---------- ride height ---------- */
@@ -386,6 +464,16 @@
         detail: 'Within 1.5% of max revs in gear ' + top + ' for ' + (out.gearing.limiterShare * 100).toFixed(1) + '% of the lap.', evidence: 'RPM and gear, ' + lapWord + '.', severity: 0.5, confidence: conf(laps.length) });
     }
 
+    /* A rear that steps out on the throttle shows up three ways: as exit oversteer, as wheelspin
+       and as the driver lifting or the traction control cutting in. They are one problem, so the
+       advice counts them once (see `group` in advisor.js). */
+    {
+      const slides = out.findings.filter((f) => f.kind === 'oversteer' && f.cause === 'power' && f.phase !== 'entry');
+      const drive = out.findings.filter((f) => (f.kind === 'wheelspin' && f.axle === 'rear') || f.kind === 'traction');
+      if (slides.length + drive.length >= 2) for (const f of slides.concat(drive)) f.group = 'power';
+      // Wheelspin with the rear stepping out is both tyres let go, not one spinning up: more lock would not help.
+      if (slides.length) for (const f of drive) f.withSlide = true;
+    }
     out.findings.sort((a, b) => b.severity - a.severity);
     return out;
   }

@@ -48,7 +48,7 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $script:Version = '1.0'
-$script:RestBase = 'http://localhost:6397'
+$script:RestBases = @('http://127.0.0.1:6397', 'http://localhost:6397')
 
 # ------------------------------------------------------------------ the reader (compiled once, runs on its own thread)
 # The byte positions below are where each value sits in the game's shared memory, worked
@@ -100,7 +100,7 @@ namespace StaLmu
         public static readonly string[] Cols = new string[] {
             "Ground Speed", "Throttle Pos Unfiltered", "Throttle Pos", "Brake Pos", "Clutch Pos", "Steering Pos", "Engine RPM",
             "G Force Lat", "G Force Long", "G Force Vert", "Pos X", "Pos Y", "Local Vel Forward", "Local Vel Lateral", "Yaw Rate",
-            "Fuel Level", "FrontRideHeight", "RearRideHeight", "Front3rdDeflection", "Rear3rdDeflection", "Gear", "ABS", "TC", "Path Lateral" };
+            "Fuel Level", "FrontRideHeight", "RearRideHeight", "Front3rdDeflection", "Rear3rdDeflection", "Gear", "ABS", "TC", "Path Lateral", "Pos Height" };
         public static readonly string[] WheelCols = new string[] {
             "Wheel Speed", "TyresPressure", "TyresTempLeft", "TyresTempCentre", "TyresTempRight", "TyresCarcassTemp", "Tyres Wear", "Brakes Temp", "RideHeights", "Susp Pos" };
     }
@@ -227,6 +227,7 @@ namespace StaLmu
             v[20] = BitConverter.ToInt32(tel, Layout.TeGear);
             v[21] = tel[Layout.TeAbsActive] != 0 ? 1f : 0f; v[22] = tel[Layout.TeTcActive] != 0 ? 1f : 0f;
             v[23] = pathLateral;
+            v[24] = Clean(D(tel, Layout.TePos + 8));     // the game's up axis: height
             f.V = v;
 
             float[] w = new float[Columns.WheelCols.Length * 4];
@@ -264,9 +265,10 @@ namespace StaLmu
         public double TrackLen, AirTemp, TrackTemp, MaxRpm, TStart, TEnd;
         public DateTime StartedUtc;
 
-        /* File: "STALMU01", header length (int32), header (UTF-8 JSON), zero padding to a multiple of 8,
+        /* File: "STALMU01", header length (int32), header (UTF-8 JSON), the setup as the game gave it
+           (UTF-8 JSON, its length is in the header, may be empty), zero padding to a multiple of 8,
            then N float64 times and N float32 per column. */
-        public void Write(string path, byte[] header)
+        public void Write(string path, byte[] header, byte[] setup)
         {
             string tmp = path + ".part";
             using (FileStream fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
@@ -275,7 +277,8 @@ namespace StaLmu
                 bw.Write(Encoding.ASCII.GetBytes("STALMU01"));
                 bw.Write(header.Length);
                 bw.Write(header);
-                int pad = (8 - ((12 + header.Length) % 8)) % 8;
+                bw.Write(setup);
+                int pad = (8 - ((12 + header.Length + setup.Length) % 8)) % 8;
                 for (int i = 0; i < pad; i++) bw.Write((byte)0);
                 byte[] buf = new byte[N * 8];
                 Buffer.BlockCopy(T, 0, buf, 0, N * 8);
@@ -565,6 +568,7 @@ namespace StaLmu
             PutD(te + Layout.TeElapsed, ET); PutI(te + Layout.TeLapNumber, Lap); PutD(te + Layout.TeLapStart, LapStart);
             PutS(te + Layout.TeVehicleName, "Demo GT3 #7"); PutS(te + Layout.TeTrackName, "Demo Speedway");
             PutD(te + Layout.TePos, x); PutD(te + Layout.TePos + 16, z);
+            PutD(te + Layout.TePos + 8, 120 + 6 * Math.Sin(2 * Math.PI * (S % Length) / Length));   // a gentle hill
             double rear = 3.5 * Math.Min(1, v * v * k / 9.6) * Math.PI / 180;      // rear slip angle
             PutD(te + Layout.TeLocalVel, 1.35 * v * k - Math.Tan(rear) * v); PutD(te + Layout.TeLocalVel + 16, -v);
             PutD(te + Layout.TeLocalAccel, v * v * k); PutD(te + Layout.TeLocalAccel + 16, -accel); PutD(te + Layout.TeLocalAccel + 8, 0);
@@ -647,26 +651,52 @@ function Get-SafeName([string]$Text) {
 
 $script:SessionNames = @{ 0 = 'Test Day'; 1 = 'Practice'; 2 = 'Practice'; 3 = 'Practice'; 4 = 'Practice'; 5 = 'Qualifying'; 6 = 'Qualifying'; 7 = 'Qualifying'; 8 = 'Qualifying'; 9 = 'Warmup'; 10 = 'Race'; 11 = 'Race'; 12 = 'Race'; 13 = 'Race' }
 
-# The setup on the car, as the game's own local web service reports it. $null when it cannot be had.
-function Get-SetupJson {
-  try {
-    $req = [System.Net.WebRequest]::Create($script:RestBase + '/rest/garage/getPlayerGarageData')
-    $req.Method = 'GET'; $req.Timeout = 1500; $req.ReadWriteTimeout = 1500
-    $res = $req.GetResponse()
-    try {
-      $reader = New-Object System.IO.StreamReader -ArgumentList $res.GetResponseStream(), ([System.Text.Encoding]::UTF8)
-      $text = $reader.ReadToEnd()
-    } finally { $res.Close() }
-    if (-not $text -or $text.Length -gt 2000000) { return $null }
-    $obj = $text | ConvertFrom-Json          # must be JSON, and must look like a setup
-    $names = @($obj.PSObject.Properties.Name)
-    if (@($names | Where-Object { $_ -like 'VM_*' }).Count -lt 3) { return $null }
-    return $text
-  } catch { return $null }
+# Does this text look like the game's setup data? It is not parsed here (the app does that, and copes with a
+# reply it cannot read); it only has to be a JSON object that names at least three setup items.
+function Test-SetupText([string]$Text) {
+  if (-not $Text -or $Text.Length -gt 4000000) { return $false }
+  if (-not $Text.TrimStart().StartsWith('{', [System.StringComparison]::Ordinal)) { return $false }
+  return ([regex]::Matches($Text, '"VM_[A-Z0-9_]+"\s*:')).Count -ge 3
 }
 
-# The JSON header of a run file. The setup is spliced in as it came from the game.
-function Get-RunHeader($Run, [string]$SetupJson, [int]$Rate) {
+function Get-WebText([string]$Url, [int]$TimeoutMs) {
+  $req = [System.Net.WebRequest]::Create($Url)
+  $req.Method = 'GET'; $req.Timeout = $TimeoutMs; $req.ReadWriteTimeout = $TimeoutMs
+  $req.Proxy = $null          # this is a program on the same PC: never go looking for a proxy
+  $res = $req.GetResponse()
+  try {
+    $reader = New-Object System.IO.StreamReader -ArgumentList $res.GetResponseStream(), ([System.Text.Encoding]::UTF8)
+    return $reader.ReadToEnd()
+  } finally { $res.Close() }
+}
+
+<# The setup on the car, as the game's own local web service reports it: @{ Text; Note }.
+   Text is $null when it cannot be had, and Note then says why in plain words.
+   Two addresses are tried (the numeric one first: "localhost" can cost seconds on Windows when
+   the game only listens on IPv4) and two of the game's pages that carry the same setup data. #>
+function Get-SetupReply {
+  $pages = @('/rest/garage/getPlayerGarageData', '/rest/garage/UIScreen/CarSetupOverview')
+  $note = 'the web service of the game (port 6397) did not answer'
+  foreach ($base in $script:RestBases) {
+    $answered = $false
+    foreach ($page in $pages) {
+      try {
+        $text = Get-WebText ($base + $page) 3000
+        $answered = $true
+        if (Test-SetupText $text) { return @{ Text = $text; Note = '' } }
+        $note = 'the game answered, but without setup values'
+      } catch [System.Net.WebException] {
+        if ($null -ne $_.Exception.Response) { $answered = $true; $note = 'the game answered with an error (' + [int]$_.Exception.Response.StatusCode + ')' }
+        else { $note = 'the web service of the game (port 6397) did not answer (' + $_.Exception.Status + ')'; break }
+      } catch { $note = 'the setup could not be asked for (' + $_.Exception.Message + ')'; break }
+    }
+    if ($answered) { break }      # the service is there; the other address would say the same
+  }
+  return @{ Text = $null; Note = $note }
+}
+
+# The JSON header of a run file. The setup follows the header as its own block, exactly as the game gave it.
+function Get-RunHeader($Run, [int]$SetupLength, [string]$SetupNote, [int]$Rate) {
   $session = 'Practice'
   if ($script:SessionNames.ContainsKey([int]$Run.Session)) { $session = $script:SessionNames[[int]$Run.Session] }
   $meta = [ordered]@{
@@ -678,28 +708,27 @@ function Get-RunHeader($Run, [string]$SetupJson, [int]$Rate) {
     format = 'sta-lmu-live'; version = 1; recorder = $script:Version; hz = $Rate; n = [int]$Run.N; tStart = [double]$Run.TStart; tEnd = [double]$Run.TEnd
     cols = [StaLmu.Columns]::Cols; wheelCols = [StaLmu.Columns]::WheelCols; meta = $meta
     laps = [ordered]@{ ts = @($Run.LapTs); num = @($Run.LapNum); time = @($Run.LapTime); s1 = @($Run.LapS1); s2 = @($Run.LapS2) }
-    setup = '@@SETUP@@'
+    setupLength = $SetupLength; setupNote = $SetupNote
   }
-  $json = $head | ConvertTo-Json -Compress -Depth 6
-  $setup = 'null'
-  if ($SetupJson) { $setup = $SetupJson }
-  return [System.Text.Encoding]::UTF8.GetBytes($json.Replace('"@@SETUP@@"', $setup))
+  return [System.Text.Encoding]::UTF8.GetBytes(($head | ConvertTo-Json -Compress -Depth 6))
 }
 
-function Save-Run($Run, [string]$SetupJson, [int]$Rate, [string]$Path) {
+function Save-Run($Run, [string]$SetupJson, [int]$Rate, [string]$Path, [string]$SetupNote) {
   if (-not $Path) {
     $dir = Get-OutDir
     if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
     $name = (Get-SafeName $Run.Track) + '_' + (Get-SafeName $Run.Car) + '_' + $Run.StartedUtc.ToString('yyyy-MM-ddTHH_mm_ssZ') + '.lmulaps'
     $Path = Join-Path $dir $name
   }
-  $Run.Write($Path, (Get-RunHeader $Run $SetupJson $Rate))
+  $setupBytes = New-Object byte[] 0
+  if ($SetupJson) { $setupBytes = [System.Text.Encoding]::UTF8.GetBytes($SetupJson) }
+  $Run.Write($Path, (Get-RunHeader $Run $setupBytes.Length $SetupNote $Rate), $setupBytes)
   return $Path
 }
 
 # ------------------------------------------------------------------ what the web app is told
 
-$script:R = @{ Finished = 0; LastFinished = $null; LastFile = ''; LastLaps = 0; LastError = ''; Status = @($false, $false, $false, $false, 0, 0, $false, '', ''); Since = $null }
+$script:R = @{ SetupAtStart = $null; Finished = 0; LastFinished = $null; LastFile = ''; LastLaps = 0; LastError = ''; Status = @($false, $false, $false, $false, 0, 0, $false, '', ''); Since = $null }
 
 function Get-RecorderStatus {
   $s = $script:R.Status
@@ -835,20 +864,28 @@ function Invoke-Poll {
   $script:R.LastError = [string]$script:Sampler.LastError
   if ([bool]$s[0] -and -not [bool]$was[0]) { Write-Log 'Le Mans Ultimate found.' }
   if (-not [bool]$s[0] -and [bool]$was[0]) { Write-Log 'Le Mans Ultimate closed.' }
-  if ([bool]$s[3] -and -not [bool]$was[3]) { $script:R.Since = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()); Write-Log ('On track: recording. ' + $s[8] + ' at ' + $s[7]) }
+  if ([bool]$s[3] -and -not [bool]$was[3]) {
+    $script:R.Since = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()); Write-Log ('On track: recording. ' + $s[8] + ' at ' + $s[7])
+    # The setup cannot change during a stint, so it is asked for now as well as when the run is saved.
+    $script:R.SetupAtStart = (Get-SetupReply).Text
+    if (-not $script:R.SetupAtStart) { Write-Log 'The game did not give the setup yet; it will be asked again when the run is saved.' }
+  }
   if (-not [bool]$s[3] -and [bool]$was[3]) { $script:R.Since = $null; if (-not [bool]$s[6]) { Write-Log 'Back in the pits before a whole lap was done: nothing to save.' } }
   if ([bool]$s[6]) {
     $run = $script:Sampler.TakeRun()
     if ($null -ne $run) {
       try {
-        $setup = Get-SetupJson
-        $path = Save-Run $run $setup $script:Rate ''
+        $reply = Get-SetupReply
+        $setup = $reply.Text; $note = $reply.Note
+        if (-not $setup -and $script:R.SetupAtStart) { $setup = $script:R.SetupAtStart; $note = '' }
+        $script:R.SetupAtStart = $null
+        $path = Save-Run $run $setup $script:Rate '' $note
         $script:R.Finished = [int]$script:R.Finished + 1
         $script:R.LastFinished = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
         $script:R.LastFile = [System.IO.Path]::GetFileName($path)
         $script:R.LastLaps = [int]$run.LapTs.Length - 1
         $setupText = 'with the setup'
-        if (-not $setup) { $setupText = 'without the setup (the game did not answer)' }
+        if (-not $setup) { $setupText = 'WITHOUT the setup: ' + $note }
         Write-Log ('In the pits: saved ' + ([int]$run.LapTs.Length - 1) + ' lap(s) ' + $setupText + ' -> ' + $path)
       } catch {
         $script:R.LastError = 'Could not save the run: ' + $_.Exception.Message
@@ -886,20 +923,24 @@ function Invoke-SelfTest {
       Check 'wheel speed is the car speed in m/s' ([Math]::Abs($run.Data[$cols + 0][200] * 3.6 - $speed[200]) -lt 0.5)
       Check 'tyre temperatures are in Celsius' ([Math]::Abs($run.Data[$cols + 3 * 4][200] - 85) -lt 0.01)
       Check 'tyre wear is in percent' ([Math]::Abs($run.Data[$cols + 6 * 4][200] - 98) -lt 0.01)
+      $hcol = [Array]::IndexOf([StaLmu.Columns]::Cols, 'Pos Height'); $hmin = 1e9; $hmax = -1e9
+      foreach ($v in $run.Data[$hcol]) { if ($v -lt $hmin) { $hmin = $v }; if ($v -gt $hmax) { $hmax = $v } }
+      Check ('the height is read: 114 to 126 m (' + [Math]::Round($hmin, 1) + ' to ' + [Math]::Round($hmax, 1) + ')') ($hmin -gt 113.5 -and $hmax -lt 126.5 -and $hmax - $hmin -gt 11)
       Check 'forward speed is positive, in m/s' ([Math]::Abs($run.Data[12][200] * 3.6 - $speed[200]) -lt 0.5)
       $out = Join-Path $tmp 'run.lmulaps'
-      [void](Save-Run $run '{"VM_REAR_WING":{"available":true,"value":5,"stringValue":"P5","minValue":0,"maxValue":10},"VM_A":{"available":true},"VM_B":{"available":true}}' 50 $out)
+      $garage = '{"VM_REAR_WING":{"available":true,"value":5,"stringValue":"P5","minValue":0,"maxValue":10},"VM_A":{"available":true},"VM_B":{"available":true}}'
+      [void](Save-Run $run $garage 50 $out '')
       $bytes = [System.IO.File]::ReadAllBytes($out)
       Check 'the file starts with its mark' ([System.Text.Encoding]::ASCII.GetString($bytes, 0, 8) -eq 'STALMU01')
       $hl = [BitConverter]::ToInt32($bytes, 8)
       $head = [System.Text.Encoding]::UTF8.GetString($bytes, 12, $hl) | ConvertFrom-Json
       Check 'the header names the run' ($head.format -eq 'sta-lmu-live' -and $head.meta.CarName -eq 'Demo GT3 #7' -and $head.n -eq $run.N)
-      Check 'the setup is carried as the game gave it' ($head.setup.VM_REAR_WING.stringValue -eq 'P5')
-      $pad = (8 - ((12 + $hl) % 8)) % 8
-      $expect = 12 + $hl + $pad + $run.N * 8 + $run.N * 4 * ($cols + [StaLmu.Columns]::WheelCols.Length * 4)
+      Check 'the setup is carried byte for byte as the game gave it' ($head.setupLength -eq $garage.Length -and [System.Text.Encoding]::UTF8.GetString($bytes, 12 + $hl, $head.setupLength) -eq $garage)
+      $pad = (8 - ((12 + $hl + $head.setupLength) % 8)) % 8
+      $expect = 12 + $hl + $head.setupLength + $pad + $run.N * 8 + $run.N * 4 * ($cols + [StaLmu.Columns]::WheelCols.Length * 4)
       Check 'the file is exactly as long as its header says' ($bytes.Length -eq $expect)
       Check 'no half-written file is left behind' (-not (Test-Path -LiteralPath ($out + '.part')))
-      Check 'the first time in the file is the start of the run' ([Math]::Abs([BitConverter]::ToDouble($bytes, 12 + $hl + $pad) - $run.TStart) -lt 1e-9)
+      Check 'the first time in the file is the start of the run' ([Math]::Abs([BitConverter]::ToDouble($bytes, 12 + $hl + $head.setupLength + $pad) - $run.TStart) -lt 1e-9)
     }
     # a stint that never completes a lap is not saved
     $short = [StaLmu.Demo]::Drive((Join-Path $tmp 'memory2.bin'), 0, 50)
@@ -911,6 +952,11 @@ function Invoke-SelfTest {
     Check 'memory of the wrong size is refused' ($null -eq $m.Read())
     $m.Dispose()
     Check 'the layout ends where the game says it does' ([StaLmu.Layout]::Telemetry + 4 + 104 * 1888 -eq [StaLmu.Layout]::Size)
+    Check 'the setup reply of the game is recognised' (Test-SetupText '{"VM_A":{"value":1},"VM_B":{"value":2},"VM_C":{"value":3}}')
+    Check 'so is the same data inside the setup-overview page' (Test-SetupText '{"carSetup":{"garageValues":{"VM_A":{},"VM_B":{},"VM_C":{}}}}')
+    Check 'an error page or an empty reply is not taken for a setup' (-not (Test-SetupText '<html>404</html>') -and -not (Test-SetupText '{"error":"no vehicle"}') -and -not (Test-SetupText ''))
+    $none = Get-SetupReply
+    Check 'with no game running the reason is given in plain words' ($null -eq $none.Text -and $none.Note -like '*did not answer*')
     Check 'web pages from elsewhere are refused' (-not (Test-OriginAllowed 'https://example.com' @()))
     Check 'pages on this computer are allowed' (Test-OriginAllowed 'http://localhost:8000' @())
     Check 'status says which sim it is for' ((Get-RecorderStatus).sim -eq 'lmu')
@@ -934,7 +980,7 @@ if ($DemoFile) {
   $image = [System.IO.Path]::GetTempFileName()
   try {
     $run = [StaLmu.Demo]::Drive($image, 3, $script:Rate)
-    $path = Save-Run $run $null $script:Rate $DemoFile
+    $path = Save-Run $run $null $script:Rate $DemoFile 'this is a made-up run'
     Write-Host ('Wrote a made-up three-lap run to ' + $path)
   } finally { try { Remove-Item -LiteralPath $image -Force } catch { } }
   exit 0

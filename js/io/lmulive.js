@@ -4,7 +4,8 @@
    File layout (little-endian):
      "STALMU01"                 8 bytes
      header length              int32
-     header                     UTF-8 JSON: { format, version, hz, n, tStart, tEnd, cols, wheelCols, meta, laps, setup }
+     header                     UTF-8 JSON: { format, version, hz, n, tStart, tEnd, cols, wheelCols, meta, laps, setupLength, setupNote }
+     setup                      setupLength bytes of UTF-8 JSON, exactly as the game gave it (may be empty)
      zero padding               to a multiple of 8 bytes
      time                       n float64 (the game's session clock, seconds)
      one block per column       n float32 each: cols first, then four (FL FR RL RR) per wheel column
@@ -38,20 +39,30 @@
     let head;
     try { head = JSON.parse(new TextDecoder('utf-8').decode(raw)); } catch (e) { throw new Error('The run file is damaged (the header cannot be read).'); }
     if (!head || head.format !== 'sta-lmu-live' || !Array.isArray(head.cols) || !Array.isArray(head.wheelCols) || !(head.n > 1)) throw new Error('The run file is damaged (unexpected header).');
-    return { head, dataAt: 12 + len + ((8 - ((12 + len) % 8)) % 8) };
+    // The setup block is read on its own: a reply from the game that cannot be parsed costs the setup, not the run.
+    const setupLen = head.setupLength > 0 && head.setupLength < 8e6 ? head.setupLength : 0, end = 12 + len + setupLen;
+    let setup = head.setup && typeof head.setup === 'object' ? head.setup : null, setupNote = head.setupNote || '';
+    if (setupLen) {
+      try { setup = JSON.parse(new TextDecoder('utf-8').decode(await bytesOf(file, 12 + len, end))); }
+      catch (e) { setup = null; setupNote = 'the game\'s reply could not be read'; }
+    }
+    // The setup-overview page wraps the same values one level down.
+    if (setup && setup.carSetup && setup.carSetup.garageValues) setup = setup.carSetup.garageValues;
+    if (setup && !Object.keys(setup).some((k) => /^VM_/.test(k))) { setup = null; setupNote = setupNote || 'the game\'s reply held no setup values'; }
+    return { head, setup, setupNote, dataAt: end + ((8 - (end % 8)) % 8) };
   }
 
   /* The setup is kept as the game gave it: the same JSON the .duckdb recording stores. */
-  function metaOf(head) {
+  function metaOf(head, setup) {
     const m = Object.assign({}, head.meta || {});
-    if (head.setup && typeof head.setup === 'object') m.CarSetup = JSON.stringify(head.setup);
+    if (setup) m.CarSetup = JSON.stringify(setup);
     m.Live = true;
     return m;
   }
 
   async function read(file, opts) {
-    const { head, dataAt } = await readHeader(file);
-    if (opts && opts.headerOnly) return { meta: metaOf(head), head };
+    const { head, setup, setupNote, dataAt } = await readHeader(file);
+    if (opts && opts.headerOnly) return { meta: metaOf(head, setup), head };
     const n = head.n, blocks = head.cols.length + head.wheelCols.length * 4, need = dataAt + n * 8 + blocks * n * 4;
     const all = await bytesOf(file, dataAt, need);
     if (all.length < need - dataAt) throw new Error('The run file is cut short: it should hold ' + n + ' samples.');
@@ -79,8 +90,8 @@
     events['Last Sector2'] = { ts: Float64Array.from(ts), v: col(L.s2) };
     events['In Pits'] = { ts: Float64Array.from([t[0]]), v: Float64Array.from([0]) }; // the recorder stops at the pit lane
     if (head.meta && head.meta.MaxRpm > 0) events['Engine Max RPM'] = { ts: Float64Array.from([t[0]]), v: Float64Array.from([head.meta.MaxRpm]) };
-    if (!head.setup) warnings.push('This run was saved without the setup (the game did not answer when the recorder asked), so setup changes cannot be suggested for it.');
-    return { meta: metaOf(head), tStart: t[0], tEnd: t[n - 1], cont, wheel, events, warnings, live: true };
+    if (!setup) warnings.push('This run was saved without the setup (' + (setupNote || 'the game did not answer when the recorder asked') + '), so the Setup advice tab is hidden for it.');
+    return { meta: metaOf(head, setup), tStart: t[0], tEnd: t[n - 1], cont, wheel, events, warnings, live: true };
   }
 
   STA.lmuLive = { read, readHeader, MAGIC };

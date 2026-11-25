@@ -144,6 +144,18 @@ test('a damaged or foreign .lmulaps file is refused with a plain message, and a 
   const bad = Buffer.from(file); bad.writeInt32LE(-5, 8);
   await assert.rejects(STA.lmuLive.read(bad), /bad header length/);
   const raw = await STA.lmuLive.read(file);
-  assert.match(raw.warnings.join(' '), /saved without the setup/);
+  assert.match(raw.warnings.join(' '), /saved without the setup \(the game did not answer when the recorder asked\), so the Setup advice tab is hidden/);
+  // the recorder's own reason is passed on
+  const why = await STA.lmuLive.read(makeLmuLaps(run, { setupNote: 'the web service of the game (port 6397) did not answer (Timeout)' }));
+  assert.match(why.warnings.join(' '), /without the setup \(the web service of the game \(port 6397\) did not answer \(Timeout\)\)/);
+  // a reply that is not JSON, or holds no setup values, costs the setup but not the run
+  for (const [bad, reason] of [['{"VM_A": oops', /reply could not be read/], ['{"error":"no vehicle"}', /held no setup values/]]) {
+    const r = await STA.lmuLive.read(makeLmuLaps(run, { setup: bad }));
+    assert.match(r.warnings.join(' '), reason);
+    assert.ok(STA.session.fromLmu(r, { name: 'x.lmulaps' }).laps.length >= 1);
+  }
+  // the same values wrapped as the setup-overview page gives them
+  const wrapped = STA.session.fromLmu(await STA.lmuLive.read(makeLmuLaps(run, { setup: { carSetup: { garageValues: SETUP_JSON } } })), { name: 'x.lmulaps' });
+  assert.ok(wrapped.setup && wrapped.setup.params.some((p) => p.role === 'rearWing'));
   assert.strictEqual(STA.session.fromLmu(raw, { name: 'x.lmulaps' }).setup, null);
 });

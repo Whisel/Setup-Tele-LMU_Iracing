@@ -139,9 +139,13 @@ What happens then:
 - **When the game reports the car in the pits** (pit lane, garage, or back at the
   menus) the run is finished: its laps are written to a `.lmulaps` file and the app
   opens it a moment later. A run with no whole lap is dropped.
-- The setup on the car is asked from the game's own local web service
-  (`/rest/garage/getPlayerGarageData`, read only) when the run is saved, so setup advice
-  works. If the game does not answer, the run is saved without it and the app says so.
+- The setup on the car is asked from the game's own local web service (read only), once
+  when the run starts and again when it is saved. Two of the game's pages carry it
+  (`/rest/garage/getPlayerGarageData` and `/rest/garage/UIScreen/CarSetupOverview`) and
+  both are tried. If neither gives it, the run is saved without the setup, the recorder
+  window says why ("did not answer", "answered with an error", "answered, but without
+  setup values"), and the app shows the same reason next to the run. Setup advice is
+  hidden for a run without a setup.
 - "Save laps now" in the app saves the laps so far without waiting for the pits.
 - These runs also carry the car's own forward and sideways velocity and yaw rate,
   which the game's `.duckdb` file does not, so **oversteer is measured** for them the
@@ -181,9 +185,17 @@ last change work?", so it is clear which run is which.
 
 ## Overlaying laps
 
-Each lap in the lap list has a **+** button; press it on as many laps as you like, or use
-**Overlay all timed laps**. Every overlaid lap gets a letter and a colour that it keeps
-until you remove it. One lap is the **reference** (the **Ref** button): time differences
+The lap list shows every lap in the file. When a session opens, its **three fastest** laps
+are overlaid (fewer if it has fewer). To change that:
+
+- **Show** picks the fastest 1, 2, 3, 5 or 10, or all of them, in one go. It replaces the
+  laps from this session and leaves laps from other sessions alone. When you have ticked
+  your own mix it reads "your pick".
+- **Tick a lap** (or click anywhere on its row) to add it or take it off.
+- **Fastest first / In lap order** sorts the list. The choice is remembered.
+- **Clear** takes every lap off.
+
+Every overlaid lap gets a letter and a colour that it keeps until you remove it. One lap is the **reference** (the **Ref** button): time differences
 and the corner table are measured against it, and you can change it at any time without
 the other laps changing colour.
 
@@ -191,6 +203,34 @@ The first eight laps have their own colour. Laps beyond that are drawn in grey, 
 more colours than that cannot be told apart reliably; point at a lap in the bar above the
 charts to pick it out in the traces and on the map. The Telemetry tables tab shows the
 reference lap and the next overlaid lap; all laps appear in the Lap comparison tab.
+
+## The track in 3D
+
+On the **Track map** tab, switch **Flat map** to **3D**. The reference lap is drawn as a
+line in space with a wall standing on it: its height is the pedal. Brake is the red part
+from the road up; throttle is the green part stacked on top. A braking peak is a tall red
+fin before a corner, and mid-corner throttle is a green wall that starts at or after the
+apex. It is a different way to look at the lap, not a replay.
+
+- **Moving around.** Drag to turn the view, right-drag or Shift-drag to move it, scroll to
+  zoom. Click the line to turn around that point; double-click or **Reset view** to start
+  again; **From above** looks straight down. With the view selected, the arrow keys turn it
+  and + and − zoom.
+- **Linked to the traces.** The speed, throttle and brake traces of every overlaid lap sit
+  below the view. Moving over either one shows the same point in both, with the values
+  in the panel on the right.
+- **Wall height** sets how tall a full pedal is drawn; **Steepness** exaggerates the hills
+  (twice as steep by default), so small climbs and drops can be seen.
+- **Height data.** iRacing files carry the car's altitude, and runs from the LMU lap
+  recorder carry the game's own height. Le Mans Ultimate's own `.duckdb` recording has
+  none, so those laps are drawn flat and the view says so.
+- **What it is not.** There is no circuit model: the files do not say where the track
+  edges are, so the view shows the line you drove on a plain ground. Perspective also
+  makes near walls look taller than far ones; read exact values from the traces.
+
+It is drawn on the page's ordinary canvas with no 3D library (a full redraw takes about
+4 ms for a 4.7 km lap), so it works from a double-clicked `index.html` like the rest of
+the app.
 
 ## Running it
 
@@ -295,15 +335,88 @@ setup that was on the car.
   "understeer" on cars that were loose, and changes that made them looser. On a public
   recording of a prototype whose rear slides for 46% of slow-corner exits, the old
   reading led with "soften the front bar, move brake bias rearward, take off rear wing,
-  stiffen the rear bar"; the new one leads with traction control and a softer rear bar.
-- **The rear comes first.** When the rear slides anywhere in the corner, understeer found
-  alongside it is ranked below it and marked "after the rear is settled". For that
-  understeer only front-end changes that do not take load or stability from the rear
-  are offered (front camber, toe, pressures, dampers, front wing): no bars, springs,
-  rear wing, differential or brake bias.
+  stiffen the rear bar"; the current one leads with traction control and rear toe-in
+  (see the next section for why not the rear bar).
+- **A rear that is loose on its own comes first.** When the rear slides on the brakes,
+  off the pedals or at steady throttle, understeer found alongside it is ranked below it
+  and marked "after the rear is settled". For that understeer only front-end changes that
+  do not take load or stability from the rear are offered (front camber, toe, pressures,
+  dampers, front wing): no bars, springs, rear wing, differential or brake bias.
+- **A rear that only steps out on the throttle does not.** See the next section.
 - **Le Mans Ultimate, and files without those channels.** The older steering-only reading
   is still used there, so treat an "understeer" finding on a car that feels loose with
   suspicion and contest the change.
+
+## Keeping one fix from causing the next problem
+
+Following the advice run after run used to walk a car into understeer: a slide on exit
+was answered with a softer rear bar, the slide was still there next run (because it came
+from the throttle), so the bar was softened again, and any understeer earlier in the corner
+was held back "until the rear is settled". Three checks now stop that.
+
+**1. Why the rear slides.** Every moment the rear lets go is filed by what the driver's
+feet were doing: on the throttle, on the brakes, or off both pedals. On the three real
+iRacing recordings used to check this (a Ligier JS P320, a BMW M Hybrid V8 and an FIA F4),
+88–100% of the sliding on the exit of slow and medium corners was above half throttle,
+with the rear wheels turning over 4% faster than the fronts in 85–100% of it; none of it
+was off the throttle. That is power oversteer: the tyres are asked for cornering and
+drive at once.
+
+- The finding says so: "It starts on the throttle: 100% of it is with the throttle on. A
+  slide typically begins at 75% throttle with 21% of the corner's steering still on."
+- **Start with the driving** is shown above the changes, with what to do from the seat.
+- The changes offered for it are the ones that act only under power: traction control,
+  rear slow bump damping, rear toe-in, the power side of the differential, rear camber
+  and pressure. The rear bar and springs come last in that list.
+- Exit oversteer on the throttle, wheelspin and a busy traction control are the same
+  problem measured three ways. They used to add up, which is what pushed "soften the rear
+  bar" to the top. They now count once.
+- **Understeer earlier in the corner comes first** on such a car, and is cured from the
+  front axle alone (front bar and springs included). A driver waiting on a front that
+  pushes still has steering on when the power goes down, and that is what turns the car.
+  Ross Bentley describes exactly this ("the understeer is a car problem, and the oversteer
+  was caused by the driver"), and HP Academy's alignment notes list exit oversteer as often
+  the result of entry or mid-corner understeer.
+- A slide on the brakes or as the driver lifts is answered with what acts off the
+  throttle (brake bias, engine braking, the coast side of the differential, rear rebound),
+  even when it carries on to the middle of the corner.
+
+**2. Where a setting acts.** Bars and springs decide how the load is shared between the
+axles for as long as the car is cornering, so they move the balance in every part of the
+corner. Dampers only act while the car is still rolling or pitching: the way in and the
+way out. Brake bias and engine braking act on the way in. The app holds this as a small
+table (`SHIFT` in `js/analysis/advisor.js`) and checks every change against the balance
+measured in the other parts of the corner:
+
+- A change that would add understeer where the front already pushes, loosen the rear
+  where it already slides, or take traction from a rear that steps out on the throttle is
+  **left out on purpose**, and listed under the changes with the reason ("Soften the rear
+  anti-roll bar: would add understeer mid-corner, where the front already pushes (+41%)").
+- The check is relative: a serious problem can still be bought with a small cost elsewhere.
+- What you felt counts as much as what was measured.
+- A floor that hits the ground or a locking wheel still has to be fixed, so those changes
+  are kept and the side effect is shown on them instead. They are not ticked by default.
+- If you want a left-out change anyway, add it as your own idea: it is weighed against
+  what it costs and listed as yours.
+
+**3. What has already been tried.** From the sessions in the library (same car, same
+track, in the order they were driven) the app works out how each setting has moved:
+
+- The same change is **not offered a third time in a row** when the problem it is for has
+  not shrunk by a third since before the first. The next route is offered instead.
+- A change made earlier is **offered back** when the part of the corner it pushes on has
+  got worse since ("Rear anti-roll bar went from 4 to 2, and since then mid-corner
+  understeer has gone from +10% to +41%"). This comes before anything new.
+- For a slide that starts with the driver's feet, **three steps without it shrinking** end
+  the setup changes for it: the app says the car is not what causes it and gives the
+  driving advice instead.
+
+On the P320 recording the advice went from "raise traction control, soften the rear bar,
+add front camber" to "soften the front bar, raise traction control", with the rear bar
+left out for the reason above. In the test suite a simulated driver who always gets on the
+throttle too early follows the ticked changes run after run: the front bar is softened
+twice (the push mid-corner goes from 63% to nothing), traction control raised twice, rear
+toe once, and on the fourth run the app stops changing the car.
 
 ## Car limits
 
@@ -408,6 +521,38 @@ and a slow corner costs time on the straight after it as well as in the corner. 
 loaded before this was added have no pace profile until their file is opened again; they
 are judged on overall lap time as before.
 
+## What you felt, and what you want to try
+
+At the top of the **Setup advice** tab, note for each run:
+
+- **How the car felt**: understeer, oversteer or balanced (corner entry, mid-corner or exit;
+  slow, medium, fast or all corners; a little or a lot), fronts locking, the rear locking or
+  stepping out under braking, wheelspin on exit, bottoming out, or that it felt good.
+- **Changes you want to try**: a setting, which way, and what it is for (one of the things
+  you felt, lap time, or just trying it).
+
+How the advice uses them:
+
+- **Your feel comes first where it disagrees.** If you felt oversteer where the telemetry
+  reads understeer (or the car felt balanced there), the telemetry reading is set aside and
+  listed as such. Where both agree, the problem counts for more. What you felt that the
+  telemetry did not show is added.
+- **Each idea gets a verdict**: *Good idea*, *Worth one run*, *Held back* or *Not possible*,
+  with the reason. It is checked against the rules, the car's limits, the other problems on
+  the car (does it make one of them worse, and does that matter more?) and what happened when
+  it was made on this car before. A held-back idea names the app's own answer instead.
+- **Ideas are ranked with the app's changes.** A sound idea the app also suggests is marked
+  *Your idea*, ticked and moved up; one it does not suggest is added. Where the app wanted the
+  opposite and that change works against what you felt, your idea replaces it. App changes
+  that work against what you felt move down the list.
+- **Learning.** When the next run's setup contains your idea, it is judged against the reason
+  you gave, by what you note after that run. That is why it pays to note how the car felt
+  after every run, including "felt good". Notes are kept per run in this browser and are
+  included in the library export.
+
+What you felt counts a quarter more than a reading only the telemetry made. The app cannot
+check your feel; if a note is wrong, remove it and the advice changes with it.
+
 ## Learning from your sessions
 
 Every session you load leaves a short record in the library: the balance in each corner
@@ -416,12 +561,14 @@ kept. The app uses those records in three ways.
 
 - **Did the last change work?** When the run before this one (same car, same track) used a
   different setup, every changed setting is treated as an experiment and shown as one row:
-  - **Why** it was changed. The app reads this from its rules (the change is a usual answer
-    to something found in the earlier run). If it cannot, it asks: pick what the change was
-    for from the list. You can also correct the app's reading.
-  - **Got**: how that measure moved.
-  - **Result**: helped, no clear difference, or worse. You can overrule it ("I say: helped")
-    when you felt something the numbers do not show; the tally then uses your call.
+  - **What it was for.** Your reason, when you noted the change as your idea (see "What you
+    felt, and what you want to try"); otherwise the app's reading from its rules (the change
+    is a usual answer to something measured or felt in the earlier run). The app no longer
+    asks about each change.
+  - **Got**: how that measure moved. A problem you felt is judged by what you noted after
+    the next run (gone, less, the same, more, or now the other way); that comes before the
+    telemetry. Without a note, the telemetry decides.
+  - **Result**: helped, no clear difference, or worse.
   - **What the app makes of it** when the expectation was missed:
     - right direction but too small (a bigger step is offered next time)
     - this setting does not drive the problem on this car (the next kind of setting is named)
@@ -451,7 +598,7 @@ practice, so one comparison is weak evidence, and when several settings change a
 app cannot tell which one did what. It says so on the page when that applies. What it
 learns is limited to what it can measure: which change moved which problem, in which
 direction, and whether one step was enough. It does not model the car, and it only knows
-why you changed something if the rules explain it or you tell it.
+why you changed something if the rules explain it or you noted it as your idea.
 
 ## How the advice is laid out
 
@@ -500,6 +647,62 @@ telemetry is never stored; drop the file again to see its traces. Use **Export l
 and **Import library** in the Setups tab to back the library up or move it to another
 browser or computer.
 
+## Tyre temperatures
+
+**On the track map.** Choose *Tyre temperature* under "Colour the line by", then a tyre or
+*Hottest at each point*. Blue is the cold side, grey is normal, red is the hot side, each in
+two steps. Moving over the line shows all four tyres at that point, for every overlaid lap.
+
+The two sims record tyre temperatures differently, so the colours mean different things:
+
+- **iRacing** records the tread surface (inner, middle, outer) all the way round the lap.
+  It swings hard: 10–30 °C up in a corner and down again on the straight. On the real
+  files checked, the on-track surface average read 20–35 °C under the carcass readings
+  iRacing takes in the pits, so holding it to a window would show every tyre as cold. On
+  the map each tyre is instead compared with its own average over the lap: red is where
+  that tyre heats up. Whether the tyres are in their window comes from the pit readings
+  (below).
+- **Le Mans Ultimate** records temperatures that move slowly and sit within a few degrees
+  of the carcass, so the map compares them with the window directly. They are too smooth
+  to show short spikes.
+
+**On the Driving technique tab**, the *Tyre temperatures* panel has:
+
+- **The working window for the car.** 80–100 °C is a general guide (published windows run
+  from about 80–90 °C for GT3 to 85–105 °C for other iRacing cars). Set the real one per car;
+  in LMU the pit menu shows the ideal temperature for each compound. The window you set is
+  kept with the car's limits and goes into the export.
+- **Against the window.** LMU: each tyre's average over the analysed laps and the share of
+  the lap spent under, in and over the window. iRacing: the carcass readings taken in the
+  pits after the run, per edge, against the window. Stop in your pit box after a run so
+  iRacing takes them; without them the app says it cannot tell.
+- **Where the tyres heat up most.** Corners where one tyre gets much hotter than it does in
+  that tyre's other corners (iRacing), or goes over the window (LMU), seen on at least half
+  of the analysed laps. Each comes with when it happens (braking, mid-corner or on the way
+  out, from where the temperature climbs fastest), a driving tip, and a link that opens the
+  map on that tyre.
+- **Warming up.** For each run (a run starts when the car leaves the pits or is reset):
+  the lap on which all four tyres came in, which tyre was last, and any laps within 3% of
+  your best before then. In LMU "came in" means reached the window; in iRacing it means
+  reached the temperature the tyre settles at on that run, because the surface reading
+  cannot be held to the window. The lap-by-lap averages are under *Tyre temperature lap by
+  lap*.
+- **Warm-up routine.** Built from those runs: brake hard into every corner on the out lap
+  and keep good speed between corners; extra work for whichever axle comes in last; the
+  lap of a run to start pushing from; and how to check the result (pit menu in LMU, pit
+  box readings in iRacing). The braking advice follows a back-to-back iRacing test
+  (simracingcockpit.gg) in which heavy braking warmed the tyres more than weaving and
+  stop-and-go did not help.
+
+If both tyres on an axle sit under or over the window, the setup advice gets a *tyres below
+/ above their window* finding, answered with the brake ducts (hotter brakes pass a little
+heat into the wheel and tyre). It is low confidence with the general window and medium with
+one you set.
+
+The camber and pressure checks (inner versus outer edge, middle versus edges) are written
+for carcass readings. For iRacing they now use the pit readings after the run instead of
+the last value in the file; with no pit reading they are left out rather than guessed.
+
 ## Known limits
 
 - **The LMU lap recorder has not been run against the game.** It was built and tested
@@ -514,9 +717,14 @@ browser or computer.
   file is a few seconds long. Lap splitting, lap times and corner detection on the iRacing
   side are covered by the test suite using recordings generated in iRacing's file layout.
   The LMU side was checked against a real multi-lap LMU recording.
-- **iRacing tyre data.** iRacing only refreshes tyre temperature, pressure and wear when
-  the car is in the pits, so tyre findings for iRacing reflect the end of a run and are
-  always low confidence.
+- **iRacing tyre data.** The surface temperatures change all the way round the lap; the
+  carcass temperatures, pressures and wear only change in the pits. The 20–35 °C gap
+  between the two was measured on one car (FIA F4 at Tsukuba, two runs with pit readings);
+  the other two real files had no pit reading after driving. The relative map colours do
+  not depend on that gap, but the warm-up in iRacing is "settled", not "in the window".
+- **Tyre windows** are a general guide until you set one per car. The hot-spot thresholds
+  (a corner 8 °C hotter than that tyre's typical corner, and at least 12 °C over its lap
+  average) were set from three real iRacing files, not tuned per car.
 - **LMU car names.** LMU's telemetry names the entry (team and number), not the car model,
   so two liveries of the same car look like different cars. A `.svm` file names the car
   differently again. The baseline tab shows same-class setups at the track separately for
@@ -535,6 +743,15 @@ browser or computer.
   with heavy downforce is driven differently from a road-based one.
 - **The advice is general.** It has no per-car targets for tyre pressures, temperatures or
   ride heights, and it cannot tell you the lap time a change is worth.
+- **Where a setting acts is a general table, not a model of your car.** The sizes in it
+  are rules of thumb agreed by the usual references, not measurements, and three kinds of
+  setting are left out because their direction depends on the car (tyre pressure, the
+  power side of the differential, traction control). The thresholds for "starts on the
+  throttle" (three quarters of the sliding with the throttle on) and for stopping (two
+  steps of one setting, three steps in all) were set from three real iRacing recordings
+  and a simulation; none of this has been checked on a run of your own sessions yet.
+- **Le Mans Ultimate has no slip-angle channels**, so the cause of oversteer there is read
+  from the pedals at the moments the steering shows it, which is coarser.
 
 ## Tests
 
@@ -563,13 +780,14 @@ command).
     js/model/session.js   laps, distance grids, track map, corners
     js/model/setup.js     setups from both sims, roles, differences
     js/data/car-limits.js per-car limits for iRacing, with their sources
-    js/analysis/          handling analysis, advice rules, driving technique,
-                          learning from earlier sessions, baseline
+    js/analysis/          handling analysis, advice rules, driving technique, what the
+                          driver felt (feel.js), tyre temperatures (tyres.js), learning
+                          from earlier sessions, baseline
     js/io/recorder.js     talks to the iRacing recorder on this PC
     recorder/             the iRacing recorder (PowerShell, Windows), with a built-in self-test
     js/store/folders.js   watched folders, the file index, where you left off
     js/store/library.js   browser-side setup and session library
-    js/ui/                charts, DuckDB loader, app shell and tabs
+    js/ui/                charts, the 3D view (track3d.js), DuckDB loader, app shell and tabs
     vendor/duckdb/        bundled DuckDB browser client (see its README)
     tests/                unit tests and the simulation that feeds them
 

@@ -7,11 +7,14 @@
    experiment:
 
      why       what the change was for. Inferred from the general rules (it is a
-               usual answer to a finding in the earlier session), or stated by
-               the driver when the app asks.
+               usual answer to a problem in the earlier session, measured or felt),
+               or the reason the driver gave when they noted it as their own idea
+               (see feel.js).
      expected  the lap gets faster where the change acts (see pace.js), and the
                problem it was aimed at gets smaller.
-     got       time gained or lost where it acts, and how the problem moved.
+     got       time gained or lost where it acts, and how the problem moved. A
+               problem the driver felt is judged by what they felt on the next run;
+               otherwise by the telemetry.
      result    helped (faster), no clear difference, or worse (slower). Lap time
                decides: a problem that got smaller without the lap getting
                faster is not counted as having helped.
@@ -46,7 +49,7 @@
     'understeer|entry': 'entry understeer', 'understeer|mid': 'mid-corner understeer', 'understeer|exit': 'exit understeer',
     'oversteer|entry': 'entry oversteer', 'oversteer|mid': 'mid-corner oversteer', 'oversteer|exit': 'exit oversteer',
     frontLock: 'front locking', rearLock: 'rear locking', wheelspin: 'wheelspin', traction: 'exit traction', bottoming: 'bottoming',
-    camberTooMuch: 'too much camber', camberTooLittle: 'too little camber', pressureHigh: 'high tyre pressure', pressureLow: 'low tyre pressure',
+    camberTooMuch: 'too much camber', camberTooLittle: 'too little camber', pressureHigh: 'high tyre pressure', pressureLow: 'low tyre pressure', tyreCold: 'cold tyres', tyreHot: 'hot tyres',
     brakeHot: 'brake temperature', limiter: 'hitting the limiter', lap: 'lap time', pace: 'lap time',
   };
   const targetText = (k) => TARGET_TEXT[k] || k;
@@ -58,7 +61,10 @@
     const near = timed.filter((t) => t <= timed[0] * 1.03);
     const out = { v: 4, prof: STA.pace ? STA.pace.profile(session, an && an.balance ? an.balance.gmax : null) : null, medianLap: near.length ? U.median(near) : null, lapSpread: near.length >= 3 ? U.std(near) : null, findings: [], balance: null, metrics: {}, habits: [] };
     if (!an) return out;
-    out.findings = an.findings.map((f) => ({ id: f.id, kind: f.kind, phase: f.phase, band: f.band, axle: f.axle, title: f.title, severity: +f.severity.toFixed(3) }));
+    // raw: the severity before it was scaled down for coming second to another problem. cause and
+    // withSlide pick the rule list (see advisor.ruleFor), so a later session can tell what a change was for.
+    out.findings = an.findings.map((f) => Object.assign({ id: f.id, kind: f.kind, phase: f.phase, band: f.band, axle: f.axle, title: f.title, severity: +f.severity.toFixed(3) },
+      f.raw != null ? { raw: +f.raw.toFixed(3) } : null, f.cause ? { cause: f.cause } : null, f.withSlide ? { withSlide: true } : null));
     out.tendencies = out.findings; // name used by the baseline builder
     if (an.balance) {
       out.balance = {};
@@ -209,10 +215,10 @@
     driver: (c) => 'No change, and your laps show ' + lower(c.habit) + ': likely the driving.',
     noLever: (c) => 'No change: this setting does not drive it on this car.' + (c.next ? ' Next: ' + lower(c.next) + '.' : ''),
     unmeasured: () => 'Not measured in these runs, so it cannot be judged.',
-    notSeen: () => 'The telemetry did not show that problem before the change, so it has nothing to compare. Give your own verdict.',
+    notSeen: () => 'The telemetry did not show that problem before the change. Note what you felt after the next run and it is judged by that.',
     lapOnly: (c, lap) => (c.why === 'none' ? 'No target' : c.why === 'pace' ? 'Made for pace' : 'No reason on record') + ': '
       + (c.time ? (c.time.word === 'same' ? 'no time change where it acts' : sec(c.time.net) + ' ' + c.time.word + ' where it acts') : 'lap ' + (lap.word === 'same' ? 'unchanged' : lap.word))
-      + '.' + (c.why === 'unknown' ? ' Say what it was for.' : ''),
+      + '.' + (c.why === 'unknown' ? ' Next time, note it as your idea with what it is for.' : ''),
     yourCall: (c) => 'Your call' + (c.auto && c.auto !== c.verdict ? ' (telemetry said ' + ({ helped: 'helped', none: 'no clear difference', hurt: 'worse' })[c.auto] + ')' : '') + '.',
   };
 
@@ -221,7 +227,8 @@
   /* Judge every change between two session records of the same car and track.
      notes:   { [changeKey]: { target, verdict } }, what the driver has said about this pair.
      learned: Map targetKey -> [{ key }], answers this car has taught the app before this pair. */
-  function judge(before, after, setupBefore, setupAfter, notes, learned) {
+  /* feel: { before, after }, what the driver noted for the two runs ({ felt, ideas }). */
+  function judge(before, after, setupBefore, setupAfter, notes, learned, feel) {
     const LEARNED = { effect: 'Learned on this car: it cut this problem before.' };
     const match = (c, f) => ruleMatch(c, f) || (learned && (learned.get(targetKey(f)) || []).some((e) => e.key === c.key) ? LEARNED : null);
     const changes = changesBetween(setupBefore, setupAfter);
@@ -230,22 +237,31 @@
     // Lap times that vary a lot make a small difference meaningless.
     const noise = Math.max(0.003, ((before.lapSpread || 0) + (after.lapSpread || 0)) / 2 / (paceB || 1));
     const lap = { before: paceB, after: paceA, rel, word: rel == null ? 'unknown' : rel <= -noise ? 'faster' : rel >= noise ? 'slower' : 'same', noise, noisy: noise > 0.006 };
-    const found = before.findings || before.tendencies || [];
+    // The problems on the car before the change: what the telemetry found, with what the driver felt worked in.
+    const fb = feel && feel.before, fa = feel && feel.after;
+    const found = STA.feel && fb && fb.felt && fb.felt.length ? STA.feel.merge({ findings: before.findings || before.tendencies || [] }, fb).findings : before.findings || before.tendencies || [];
     // Where the best lap gained or lost time, zone by zone. null for records made before pace profiles were kept.
     const pd = STA.pace ? STA.pace.delta(before.prof, after.prof) : null;
-    const withMove = (f, rule) => Object.assign({ id: f.id, title: f.title, kind: f.kind, phase: f.phase, band: f.band, axle: f.axle, stated: !!f.stated, key: targetKey(f), mechanism: rule ? rule.effect : '' }, movement(f, before, after, lap));
+    // A problem the driver felt is judged by what they felt next time, when they noted it; otherwise by the telemetry.
+    const moveOf = (f) => ((f.felt || f.agreed) && STA.feel && STA.feel.moved(f, fa)) || movement(f, before, after, lap);
+    const withMove = (f, rule) => Object.assign({ id: f.id, title: f.title, kind: f.kind, phase: f.phase, band: f.band, axle: f.axle, stated: !!f.stated, felt: !!(f.felt || f.agreed), key: targetKey(f), mechanism: rule ? rule.effect : '' }, moveOf(f));
 
     for (const c of changes) {
       const note = (notes && notes[c.key]) || {};
-      const stated = note.target ? resolveIntent(note.target, before) : null;
+      // The driver's own idea, noted with the run before, and made: its reason is the reason.
+      const idea = ((fb && fb.ideas) || []).find((i) => i.role === c.role && (i.axle || null) === (c.axle || null) && i.dir === c.dir);
+      if (idea) c.yours = true;
+      const aimed = idea && !note.target && STA.feel ? STA.feel.aimOf(idea, found) : null;
+      const stated = note.target ? resolveIntent(note.target, before) : aimed ? Object.assign({ stated: true }, aimed) : null;
       c.note = note;
-      if (note.target === 'none') { c.why = 'none'; c.targets = []; }
+      if (note.target === 'none' || (idea && !note.target && idea.for === 'none')) { c.why = 'none'; c.targets = []; }
+      else if (idea && !note.target && idea.for === 'pace') { c.why = 'pace'; c.purpose = 'Lap time (your reason)'; c.targets = []; }
       else if (stated) { c.why = 'driver'; c.targets = [withMove(stated, match(c, stated))]; }
       else { c.targets = found.map((f) => [f, match(c, f)]).filter((x) => x[1]).map((x) => withMove(x[0], x[1])); c.why = c.targets.length ? 'app' : 'unknown'; }
 
       // A wing change that answers no handling problem was made for pace (unless the driver says otherwise):
       // it is judged on lap time alone.
-      const aim = !stated && note.target !== 'none' && !c.targets.length && STA.pace ? STA.pace.purpose(c) : null;
+      const aim = !stated && c.why !== 'none' && c.why !== 'pace' && note.target !== 'none' && !c.targets.length && STA.pace ? STA.pace.purpose(c) : null;
       if (aim) { c.why = 'pace'; c.purpose = aim; }
       // Lap time where this change acts. Without pace profiles (older records) the whole lap stands in.
       c.time = pd ? STA.pace.effect(c, changes, pd) : null;
@@ -271,7 +287,7 @@
       else {
         c.verdict = 'none';
         const habit = (after.habits || []).find((h) => T.some((t) => t.key === h.relates));
-        if (T.every((t) => t.stated && t.absent)) c.cause = 'notSeen';
+        if (T.every((t) => t.stated && t.absent && !t.byFeel)) c.cause = 'notSeen';
         else if (habit) { c.cause = 'driver'; c.habit = habit.title; }
         else { c.cause = 'noLever'; c.next = alternative(c, T[0]); }
       }
@@ -288,7 +304,7 @@
     const bonus = [];
     if (changes.length) for (const f of found) {
       if (changes.some((c) => c.targets.some((t) => t.id === f.id) || match(c, f))) continue;
-      const m = movement(f, before, after, lap);
+      const m = moveOf(f);
       if (m.word === 'better') bonus.push(Object.assign({ id: f.id, title: f.title, kind: f.kind, phase: f.phase, band: f.band, axle: f.axle, key: targetKey(f), credit: changes.map((c) => c.key) }, m));
     }
     return { changes, lap, bonus, pace: pd };
@@ -313,6 +329,32 @@
     return out.sort((a, b) => (a.after.recordedAt || 0) - (b.after.recordedAt || 0));
   }
 
+  /* How each setting has moved over the sessions leading up to this one, same car and track:
+       "role|axle" -> { role, axle, dir, n, from, to, then, when }
+     n counts changes the same way in a row (a change the other way starts the count again), from and
+     to are the values before the first and after the last of them, and `then` is the record of the
+     session before the first. Only sessions up to this one count, so looking back at an older run
+     is not answered with what came later. The advisor uses it to stop repeating a change that is
+     not working and to offer one back when the car has got worse since (advisor.js). */
+  function trail(summaries, setups, session) {
+    const out = new Map();
+    if (!session || !session.setup) return out;
+    const byId = new Map(setups.map((s) => [s.id, s]));
+    const q = { sim: session.meta.sim, car: session.meta.car, track: session.trackName };
+    const mine = summaries.filter((s) => s.sim === q.sim && STA.library.sameCar(s.car, q.car) && STA.library.sameTrack(s.track, q.track) && s.setupId && byId.has(s.setupId))
+      .sort((a, b) => (a.recordedAt || 0) - (b.recordedAt || 0));
+    const at = mine.findIndex((s) => s.id === session.id);
+    for (let i = 1; i <= at; i++) {
+      if (mine[i].setupId === mine[i - 1].setupId) continue;
+      for (const c of changesBetween(byId.get(mine[i - 1].setupId), byId.get(mine[i].setupId))) {
+        const k = c.role + '|' + (c.axle || ''), e = out.get(k);
+        if (e && e.dir === c.dir) { e.n++; e.to = c.to; }
+        else out.set(k, { role: c.role, axle: c.axle, dir: c.dir, n: 1, from: c.from, to: c.to, then: mine[i - 1], when: mine[i].recordedAt || 0 });
+      }
+    }
+    return out;
+  }
+
   const runs = (n) => (n === 1 ? '1 run' : n + ' runs');
   const sure = (n, clean) => (n >= 4 && clean ? 'high' : n >= 2 ? 'medium' : 'low');
 
@@ -322,7 +364,7 @@
        relay  [{ kind, text, confidence, when }]                       the same, in sentences, newest first
        judged Map afterSessionId -> the judged pair that led into that session
      reasons: { [afterSessionId]: { [changeKey]: { target, verdict } } } */
-  function knowledge(summaries, setups, q, reasons) {
+  function knowledge(summaries, setups, q, reasons, feel) {
     const stats = new Map(), links = new Map(), lapGains = [], judged = new Map();
     // A link counts once it has one clean result (the only change) or two shared ones,
     // and stops counting if the same change has since failed for that problem.
@@ -338,7 +380,7 @@
     const DEAD = { noLever: 1, driver: 1, paceEven: 1, lapOnly: 1 };
     const stat = (c) => stats.get(c.key) || stats.set(c.key, { title: c.title, tried: 0, helped: 0, none: 0, hurt: 0, dead: 0, time: 0, timed: 0, trials: [], by: {} }).get(c.key);
     for (const p of pairs(summaries, setups, { sim: q.sim, car: q.car })) {
-      const j = judge(p.before, p.after, p.setupBefore, p.setupAfter, reasons && reasons[p.after.id], active()), when = p.after.recordedAt || 0;
+      const j = judge(p.before, p.after, p.setupBefore, p.setupAfter, reasons && reasons[p.after.id], active(), feelPair(feel, p)), when = p.after.recordedAt || 0;
       judged.set(p.after.id, Object.assign({ pair: p }, j));
       for (const c of j.changes) {
         if (c.cause === 'unmeasured' || c.cause === 'notSeen') continue;
@@ -396,11 +438,12 @@
   }
 
   /* Kept for callers that only want the tallies. */
-  const outcomes = (summaries, setups, q, reasons) => knowledge(summaries, setups, q, reasons).stats;
+  const outcomes = (summaries, setups, q, reasons, feel) => knowledge(summaries, setups, q, reasons, feel).stats;
+  function feelPair(feel, p) { return feel ? { before: feel[p.before.id] || null, after: feel[p.after.id] || null } : null; }
 
   /* The change that led into this session, judged. null when there is no earlier session
      with this car at this track. */
-  function review(summaries, setups, session, reasons) {
+  function review(summaries, setups, session, reasons, feel) {
     if (!session || !session.setup) return null;
     const q = { sim: session.meta.sim, car: session.meta.car, track: session.trackName };
     const mine = summaries.filter((s) => s.sim === q.sim && STA.library.sameCar(s.car, q.car) && STA.library.sameTrack(s.track, q.track) && s.bestLap)
@@ -413,9 +456,9 @@
     const a = byId.get(before.setupId), b = byId.get(after.setupId);
     if (!a || !b) return null;
     // Judged with what the app knew about this car at that point, the same way the tallies are built.
-    const j = knowledge(summaries, setups, q, reasons).judged.get(after.id) || judge(before, after, a, b, reasons && reasons[after.id]);
-    return { before, after, setupBefore: a, setupAfter: b, changes: j.changes, lap: j.lap, bonus: j.bonus, pace: j.pace, sessions: mine.length, choices: intentChoices(before) };
+    const j = knowledge(summaries, setups, q, reasons, feel).judged.get(after.id) || judge(before, after, a, b, reasons && reasons[after.id], null, feelPair(feel, { before, after }));
+    return { before, after, setupBefore: a, setupAfter: b, changes: j.changes, lap: j.lap, bonus: j.bonus, pace: j.pace, sessions: mine.length, choices: intentChoices(before), feltBefore: !!(feel && feel[before.id] && feel[before.id].felt && feel[before.id].felt.length), feltAfter: !!(feel && feel[after.id] && feel[after.id].felt && feel[after.id].felt.length) };
   }
 
-  STA.learning = { snapshot, changesBetween, addresses, judge, pairs, outcomes, knowledge, review, intentChoices, targetKey, targetText };
+  STA.learning = { snapshot, changesBetween, addresses, judge, pairs, trail, outcomes, knowledge, review, intentChoices, targetKey, targetText };
 })(typeof window !== 'undefined' ? window : globalThis);

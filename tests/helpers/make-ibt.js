@@ -103,10 +103,13 @@ function makeIbt(run, extra) {
     ['LongAccel', 4, 'm/s^2', (j) => run.longAccel[j]],
     ['Lat', 5, 'deg', (j) => lat0 + (run.y[j] / R) * k],
     ['Lon', 5, 'deg', (j) => lon0 + (run.x[j] / (R * Math.cos(lat0 / k))) * k],
+    ['Alt', 4, 'm', (j) => 150 + ((extra && extra.hill) || 0) * Math.sin((2 * Math.PI * (run.dist[j] % run.length)) / run.length)],
     ['OnPitRoad', 1, '', () => 0],
     ['FuelLevel', 4, 'l', (j) => 60 - run.t[j] * 0.01],
   ];
   // The car's own velocities and yaw rate, as iRacing logs them (only when the run was simulated with them).
+  // Extra channels a test wants in the file, as [name, type, unit, (j) => value].
+  if (extra && extra.cols) for (const c of extra.cols) { const k = cols.findIndex((x) => x[0] === c[0]); if (k >= 0) cols[k] = c; else cols.push(c); }
   if (run.slip) cols.push(['YawRate', 4, 'rad/s', (j) => run.yawRate[j]], ['VelocityX', 4, 'm/s', (j) => run.velX[j]], ['VelocityY', 4, 'm/s', (j) => run.velY[j]]);
   const size = { 1: 1, 2: 4, 4: 4, 5: 8 };
   let off = 0; const vars = cols.map(([name, type, unit, fn]) => { const v = { name, type, unit, fn, offset: off }; off += size[type]; return v; });

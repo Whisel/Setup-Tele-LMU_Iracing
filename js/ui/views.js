@@ -104,6 +104,17 @@
       const thr = css('--thr'), brk = css('--brk'), coast = css('--muted');
       lines[0].colors = Array.from(g.throttle, (v, i) => (v !== v ? 'transparent' : g.brake[i] > 0.05 ? brk : v > 0.2 ? thr : coast));
       legend.push({ swatches: [[thr, 'On throttle'], [brk, 'Braking'], [coast, 'Coasting']], label: 'Lap ' + R + ' pedals' });
+    } else if (mode === 'tyres') {
+      const s = p.a.session, tm = STA.tyres.modeOf(s), win = STA.tyres.windowFor(s.meta.sim, s.meta.car);
+      const which = ui().tyreWheel == null ? 'hot' : ui().tyreWheel;
+      const lm = STA.tyres.lapMap(g, which, tm, win), cols = tyreColours();
+      lines[0].colors = Array.from(lm.cls, (k, i) => (g.speed[i] !== g.speed[i] ? 'transparent' : cols[k + 2]));
+      const who = which === 'hot' ? 'hottest tyre' : STA.tyres.WHEEL_TEXT[STA.WHEELS[which]] + ' tyre';
+      const st = tm === 'window' ? STA.tyres.WIN_STEPS : STA.tyres.REL_STEPS;
+      legend.push({ swatches: tm === 'window'
+        ? [[cols[0], st[1] + '+ °C under'], [cols[1], 'Under'], [cols[2], 'In the window, ' + win.lo + '–' + win.hi + ' °C'], [cols[3], 'Over'], [cols[4], st[1] + '+ °C over']]
+        : [[cols[0], st[1] + '+ °C cooler'], [cols[1], st[0] + '–' + st[1] + ' °C cooler'], [cols[2], 'Within ' + st[0] + ' °C of its lap average'], [cols[3], st[0] + '–' + st[1] + ' °C hotter'], [cols[4], st[1] + '+ °C hotter']],
+        label: 'Lap ' + R + ', ' + who + (tm === 'window' ? ' against its window' : ' against its own lap average') });
     } else if (mode === 'gain' && p.b) {
       // Where each of the two laps gains: slope of the time difference over the surrounding 80 m.
       const ca = css(p.a.colorVar), cb = css(p.b.colorVar), even = css('--muted'), w = Math.round(40 / g.step), d = p.delta;
@@ -115,6 +126,12 @@
       legend.push({ swatches: named.map((l) => [css(l.colorVar), 'Lap ' + l.letter]).concat(grey ? [[css('--lap-x'), grey + ' more in grey']] : []), label: 'Driven lines' });
     }
     return { lines, corners: p.corners.map((c) => ({ name: c.name, i: c.apex })), legend };
+  }
+
+  /* Diverging colours for tyre temperature: two blues (cold side), a neutral grey, two reds
+     (hot side). Checked for colour-blind separation against the track ribbon in each theme. */
+  function tyreColours() {
+    return document.documentElement.dataset.theme === 'dark' ? ['#b7d3f6', '#3987e5', '#66655f', '#ec6a52', '#fbd2c8'] : ['#104281', '#5598e7', '#c4c2ba', '#e34948', '#8f1d1d'];
   }
 
   function legendEl(legend) {
@@ -206,20 +223,29 @@
     if (!p) return view().appendChild(empty('Track map', 'Load a telemetry file to see the track and the line you drove.'));
     const g = p.a.grid, R = p.a.letter;
     if (!g.x) return view().appendChild(empty('No position data', 'This file does not contain position data, so a track map cannot be drawn.'));
+    if (ui().mapView === '3d') return renderMap3d(p);
     const mode = ui().mapMode || 'speed';
     const mapBox = h('div', { class: 'mapbox big' }), readout = h('div', { class: 'readout' });
-    const md = mapData(p, mode === 'gain' && !p.b ? 'lines' : mode);
+    const tm = STA.tyres.modeOf(p.a.session), useMode = (mode === 'gain' && !p.b) || (mode === 'tyres' && !tm) ? 'lines' : mode;
+    const md = mapData(p, useMode);
     const modes = [['speed', 'Speed on lap ' + R], ['pedals', 'Throttle and brake on lap ' + R], ['gain', p.b ? 'Where laps ' + R + ' and ' + p.b.letter + ' gain time' : 'Where each lap gains time'],
-      ['lines', p.laps.length > 2 ? 'All ' + p.laps.length + ' driven lines' : 'Driven lines']];
-    const sel = h('select', { onchange: (ev) => { ui().mapMode = ev.target.value; render(); } }, modes.map(([v, t]) => h('option', { value: v, selected: v === mode, disabled: v === 'gain' && !p.b, text: t })));
+      ['lines', p.laps.length > 2 ? 'All ' + p.laps.length + ' driven lines' : 'Driven lines']].concat(tm ? [['tyres', 'Tyre temperature on lap ' + R]] : []);
+    const sel = h('select', { onchange: (ev) => { ui().mapMode = ev.target.value; render(); } }, modes.map(([v, t]) => h('option', { value: v, selected: v === useMode, disabled: v === 'gain' && !p.b, text: t })));
+    const wheelSel = useMode === 'tyres' ? h('label', { class: 'mini' }, ['Tyre ', h('select', { onchange: (ev) => { ui().tyreWheel = ev.target.value === 'hot' ? 'hot' : +ev.target.value; render(); } },
+      [['hot', 'Hottest at each point']].concat(STA.WHEELS.map((w, i) => [i, STA.tyres.WHEEL_TEXT[w].replace(/^./, (c) => c.toUpperCase())])).map(([v, t]) => h('option', { value: v, selected: String(v) === String(ui().tyreWheel == null ? 'hot' : ui().tyreWheel), text: t })))]) : null;
+    const tw = STA.tyres.windowFor(p.a.session.meta.sim, p.a.session.meta.car);
+    const tyreHint = useMode !== 'tyres' ? null : h('p', { class: 'hint', text: tm === 'window'
+      ? 'Window ' + tw.lo + '–' + tw.hi + ' °C' + (tw.mine ? ', the one you set for this car.' : ', a general guide. Set the window for this car on the Driving technique tab.') + ' Le Mans Ultimate\'s tyre temperatures change slowly, so short spikes do not show.'
+      : 'iRacing\'s surface temperatures read well under the readings it takes in the pits, so each tyre is compared with its own average over the lap: red is where it heats up. Whether the tyres sit in their window is on the Driving technique tab.' });
     let map = null;
     view().appendChild(h('section', { class: 'panel map-full' }, [
       h('div', { class: 'panel-head' }, [h('h2', { text: p.a.session.trackName }),
-        h('div', { class: 'tools' }, [h('label', { class: 'mini' }, ['Colour the line by ', sel]), h('button', { class: 'btn ghost', type: 'button', text: 'Reset view', onclick: () => map && map.resetView() })])]),
-      h('div', { class: 'map-split' }, [mapBox, h('div', { class: 'map-side' }, [legendEl(md.legend), readout,
+        h('div', { class: 'tools' }, [mapViewSwitch('2d'), h('label', { class: 'mini' }, ['Colour the line by ', sel]), wheelSel, h('button', { class: 'btn ghost', type: 'button', text: 'Reset view', onclick: () => map && map.resetView() })])]),
+      h('div', { class: 'map-split' }, [mapBox, h('div', { class: 'map-side' }, [legendEl(md.legend), tyreHint, readout,
         h('p', { class: 'hint', text: 'Scroll to zoom, drag to move, double-click to fit. Move over the line to read the values at that point.' })])]),
     ]));
     const cols = p.laps.slice(0, 6); // the readout stays readable up to six laps
+    const tyreCache = new Map(), tyreAt = (l, w) => { const k = l.slot + '|' + w; if (!tyreCache.has(k)) tyreCache.set(k, l.grid.tyreTempM ? STA.tyres.surface(l.grid, w) : null); return tyreCache.get(k); };
     const showAt = (i) => {
       if (i < 0) { readout.innerHTML = '<p class="empty">Move over the line to read values.</p>'; return; }
       const c = p.corners.find((c) => i >= c.a && i <= c.b);
@@ -231,12 +257,78 @@
       html += row('Brake, %', (l) => U.fmt(at(l, 'brake') * 100, 0));
       if (g.gear) html += row('Gear', (l) => U.fmt(at(l, 'gear'), 0));
       if (g.latG) html += row('Lateral G', (l) => U.fmt(at(l, 'latG'), 2));
+      if (useMode === 'tyres') for (let w = 0; w < 4; w++) html += row(STA.WHEELS[w] + ' tyre, °C', (l) => { const sm = tyreAt(l, w); return sm ? U.fmt(sm[i], 0) : ''; });
       html += row('Lap time so far, s', (l) => U.fmt(g.t[i] + (l.delta ? l.delta[i] : 0), 3));
       if (p.b) html += row('Gap to lap ' + R + ', s', (l) => (l.delta ? U.fmtDelta(l.delta[i]) : ''));
       readout.innerHTML = html + '</tbody></table>' + (p.laps.length > cols.length ? '<p class="hint">Showing the first ' + cols.length + ' of ' + p.laps.length + ' laps.</p>' : '');
     };
     map = new STA.charts.TrackMap(mapBox, { onCursor: showAt }); live.push(map);
     map.setData(md); showAt(-1);
+  }
+
+  function mapViewSwitch(now) {
+    return h('div', { class: 'seg', role: 'group', 'aria-label': 'Map view' }, [['2d', 'Flat map'], ['3d', '3D']].map(([v, t]) =>
+      h('button', { class: 'seg-btn' + (v === now ? ' on' : ''), type: 'button', 'aria-pressed': v === now ? 'true' : 'false', text: t, onclick: () => { if (v !== now) { ui().mapView = v; render(); } } })));
+  }
+
+  /* The reference lap in 3D: the line with a wall for brake and throttle, and the pedal traces below it. */
+  function renderMap3d(p) {
+    const g = p.a.grid, R = p.a.letter, s = p.a.session, u = ui();
+    const sc = STA.view3d.sceneOf(g), flat = !sc || !sc.z;
+    const box = h('div', { class: 'mapbox big' }), readout = h('div', { class: 'readout' }), traces = h('div', { class: 'traces' });
+    const wallOpts = [[0.6, 'Low'], [1, 'Medium'], [1.6, 'High'], [2.5, 'Very high']];
+    const exagOpts = [[1, 'True to life'], [2, 'Twice'], [4, 'Four times'], [8, 'Eight times']];
+    const wallMul = u.wall3d || 1, exag = flat ? 1 : (u.exag3d || 2);
+    let t3d = null;
+    const wallSel = h('select', { onchange: (ev) => { u.wall3d = +ev.target.value; t3d.setOptions({ wallMul: u.wall3d }); note.textContent = wallNote(); } },
+      wallOpts.map(([v, t]) => h('option', { value: v, selected: v === wallMul, text: t })));
+    const exagSel = h('select', { disabled: flat, title: flat ? 'This recording has no height data' : '', onchange: (ev) => { u.exag3d = +ev.target.value; t3d.setOptions({ exag: u.exag3d }); } },
+      flat ? [h('option', { text: 'Flat (no height data)' })] : exagOpts.map(([v, t]) => h('option', { value: v, selected: v === exag, text: t })));
+    const wallNote = () => 'Full pedal is a wall ' + Math.round(STA.view3d.wallMetres(sc) * (u.wall3d || 1)) + ' m high.';
+    const note = h('p', { class: 'hint', text: sc ? wallNote() : '' });
+    const css = STA.charts.css;
+    const heightText = flat
+      ? (s.meta.sim === 'lmu' && !s.meta.live ? 'Le Mans Ultimate\'s own recording has no height data, so the track is drawn flat. Runs from the LMU lap recorder have it.' : 'This recording has no height data, so the track is drawn flat.')
+      : 'Height from the recording: ' + Math.round(sc.zRange) + ' m from the lowest to the highest point of the lap' + (exag > 1 ? ', shown ' + (exagOpts.find((o) => o[0] === exag) || [0, exag + ' times'])[1].toLowerCase() + ' as steep.' : '.');
+    view().appendChild(h('section', { class: 'panel map-full' }, [
+      h('div', { class: 'panel-head' }, [h('h2', { text: s.trackName + ', lap ' + R + ' in 3D' }),
+        h('div', { class: 'tools' }, [mapViewSwitch('3d'), h('label', { class: 'mini' }, ['Wall height ', wallSel]), h('label', { class: 'mini' }, ['Steepness ', exagSel]),
+          h('button', { class: 'btn ghost', type: 'button', text: 'From above', onclick: () => t3d && t3d.topDown() }),
+          h('button', { class: 'btn ghost', type: 'button', text: 'Reset view', onclick: () => t3d && t3d.resetView() })])]),
+      h('div', { class: 'map-split' }, [box, h('div', { class: 'map-side' }, [
+        legendEl([{ swatches: [[css('--brk'), 'Brake'], [css('--thr'), 'Throttle'], [css('--muted'), 'Neither']], label: 'Lap ' + R + ': wall height is the pedal' }]), note, readout,
+        h('p', { class: 'hint', text: heightText }),
+        h('p', { class: 'hint', text: 'Drag to turn the view, right-drag or Shift-drag to move it, scroll to zoom. Click the line to turn around that point, double-click to start again. With the view selected, the arrow keys turn it and + and − zoom.' })])]),
+    ]));
+    const laps = p.laps.length > 1 ? p.laps.length + ' laps' : 'Lap ' + R;
+    view().appendChild(h('section', { class: 'panel' }, [h('div', { class: 'panel-head' }, [h('h2', { text: laps + ' by lap distance' }), h('span', { class: 'h-note', text: 'Move over the traces to find the same point in 3D.' })]), traces]));
+
+    const cols = p.laps.slice(0, 6);
+    const showAt = (i) => {
+      if (i < 0) { readout.innerHTML = '<p class="empty">Move over the line or the traces to read values.</p>'; return; }
+      const c = p.corners.find((c) => i >= c.a && i <= c.b);
+      const row = (label, f) => '<tr><th>' + label + '</th>' + cols.map((l) => '<td class="num">' + f(l) + '</td>').join('') + '</tr>';
+      const at = (l, name) => { const arr = l.on(name); return arr ? arr[i] : NaN; };
+      let html = '<table class="data kv"><thead><tr><th>' + Math.round(g.d[i]) + ' m' + (c ? ', ' + c.name : '') + '</th>' + cols.map((l) => '<th class="num"><i class="sw" style="background:var(' + l.colorVar + ')"></i>' + l.letter + '</th>').join('') + '</tr></thead><tbody>';
+      html += row('Brake, %', (l) => U.fmt(at(l, 'brake') * 100, 0));
+      html += row('Throttle, %', (l) => U.fmt(at(l, 'throttle') * 100, 0));
+      html += row('Speed, ' + A().speedUnit(), (l) => U.fmt(A().speed(at(l, 'speed')), 1));
+      if (g.gear) html += row('Gear', (l) => U.fmt(at(l, 'gear'), 0));
+      if (g.z && !flat) html += row('Height above lowest point, m', (l) => U.fmt(at(l, 'z') - sc.zMin, 1));
+      readout.innerHTML = html + '</tbody></table>';
+    };
+    let stack = null;
+    t3d = new STA.charts.Track3D(box, { onCursor: (i) => { showAt(i); if (stack) stack.setCursor(i, false); }, onView: (v) => { u.cam3d = { key: s.id + '|' + p.a.lap.idx, v }; } });
+    live.push(t3d);
+    t3d.setOptions({ wallMul, exag });
+    const keep = u.cam3d && u.cam3d.key === s.id + '|' + p.a.lap.idx ? u.cam3d.v : null;
+    t3d.setData({ grid: g, corners: p.corners.map((c) => ({ name: c.name, i: c.apex })), label: 'Lap ' + R + ' at ' + s.trackName }, keep);
+    stack = new STA.charts.TraceStack(traces, { onCursor: (i) => { t3d.setCursor(i, false); showAt(i); } });
+    live.push(stack);
+    const on = { speed: true, throttle: true, brake: true };
+    const saved = u.channels; u.channels = on;
+    try { stack.setData({ x: g.d, panels: tracePanels(p), corners: p.corners }); } finally { u.channels = saved; }
+    showAt(-1);
   }
 
   /* ---------- Telemetry tables ---------- */
@@ -446,11 +538,14 @@
     const s = A().active();
     if (!s) return view().appendChild(empty('Setup advice', 'Load a telemetry file to get setup changes for the setup that was on the car.'));
     if (!s.refLap) return view().appendChild(empty('No complete lap', 'Setup advice needs at least one complete lap.'));
-    const { an, adv } = A().analysisFor(s), sim = s.meta.sim, car = s.meta.car;
-    const checked = ui().adviceChecked && ui().adviceFor === s.id ? ui().adviceChecked : (ui().adviceFor = s.id, ui().adviceChecked = Object.fromEntries(adv.suggestions.filter((x) => x.primary).slice(0, 2).map((x) => [x.key, true])));
+    const { an: measured, merged: an, notes, adv } = A().analysisFor(s), sim = s.meta.sim, car = s.meta.car;
+    // Ticked to start with: the app's first two that come without a known side effect, and every idea of yours that it agrees with.
+    const checked = ui().adviceChecked && ui().adviceFor === s.id ? ui().adviceChecked : (ui().adviceFor = s.id, ui().adviceChecked = Object.fromEntries(adv.suggestions.filter((x) => x.primary && !x.sideEffect && !x.conflict).slice(0, 2).concat(adv.suggestions.filter((x) => x.yours && x.ideaVerdict === 'good')).map((x) => [x.key, true])));
     const again = () => { ui().contestOpen = null; ui().adviceChecked = null; render(); };
 
-    /* --- the changes, first --- */
+    view().appendChild(feelPanel(s, an, notes, adv));
+
+    /* --- the changes --- */
     const list = h('div', { class: 'suggestions' }), blockedList = STA.library.blocked.list(sim, car);
     if (!s.setup) list.appendChild(h('p', { class: 'empty', text: 'No setup in this file, so only findings are shown.' }));
     else if (!adv.suggestions.length) list.appendChild(h('p', { class: 'empty', text: an.findings.length ? 'No setup change is available for these findings on this car.' : 'No changes suggested. Keep this setup.' }));
@@ -458,8 +553,11 @@
       const tags = [];
       if (x.alternativeTo) tags.push(['warn', 'Instead of: ' + x.alternativeTo.join('; ')]);
       else if (x.insteadOf) tags.push(['warn', 'Instead of: ' + x.insteadOf]);
+      if (x.yours) tags.push(x.ideaVerdict === 'try' ? ['warn', 'Your idea: worth one run'] : ['good', 'Your idea']);
       if (x.learned) tags.push(['good', 'Learned on this car']);
       if (x.rearFirst) tags.push(['warn', 'After the rear is settled: the rear slides on this car']);
+      if (x.undo) tags.push(['warn', 'Takes back an earlier change']);
+      if (x.sideEffect) tags.push(['warn', 'Side effect: ' + x.sideEffect]);
       if (x.bigger) tags.push(['warn', 'Bigger step: one was too small last time']);
       if (x.historyText) tags.push([x.demoted ? 'bad' : 'good', x.historyText]);
       if (x.conflict) tags.push(['warn', 'Works against: ' + x.conflict.join('; ')]);
@@ -492,12 +590,25 @@
     });
     const nameIn = h('input', { type: 'text', class: 'text', value: (s.setup ? s.setup.name : 'Setup') + ' – revised', 'aria-label': 'Name for the revised setup' });
     const nOut = adv.skipped.reduce((n, k) => n + k.items.length, 0);
+    // Oversteer that starts with the driver's feet: said before any change to the car.
+    const driveFirst = adv.driving && adv.driving.length ? h('div', { class: 'drive-first' }, [h('h3', { text: 'Start with the driving' }),
+      h('ul', { class: 'plain' }, adv.driving.map((d) => h('li', {}, [h('b', { text: d.finding + '. ' }), d.text + ' ', h('span', { class: 'evidence', text: 'Try: ' + d.tips.join(' ') })]))),
+      h('p', { class: 'hint', text: 'The changes below for these act only in that part of the corner. Nothing is offered that would trade them for understeer elsewhere.' })]) : null;
+    // Changes left out because of what they would do elsewhere, grouped by the reason.
+    const heldBy = new Map();
+    for (const k of adv.held || []) for (const i of k.items) { const e = heldBy.get(i.why) || heldBy.set(i.why, { titles: new Set(), findings: new Set() }).get(i.why); e.titles.add(i.title); e.findings.add(lower(k.finding)); }
+    const heldBlock = heldBy.size ? h('div', { class: 'skipped' }, [h('h3', { text: 'Left out on purpose' }),
+      h('ul', { class: 'plain' }, Array.from(heldBy, ([why, e]) => h('li', {}, [h('b', { text: Array.from(e.titles).join(', ') + ': ' }), why + '. ', h('span', { class: 'evidence', text: 'The usual answer to ' + Array.from(e.findings).join('; ') + '.' })]))),
+      h('p', { class: 'hint', text: 'If you want one anyway, add it under "What you want to try" above and it is weighed against what it costs.' })]) : null;
     view().appendChild(h('section', { class: 'panel' }, [
       h('h2', { text: 'Changes to make' }),
       h('p', { class: 'hint', text: (an.lapNums.length === 1 ? 'Lap ' : 'Laps ') + an.lapNums.join(', ') + ' · ' + car + ' at ' + s.trackName + '. Try the ticked ones, drive 3–5 laps, reload.' }),
+      driveFirst,
       list,
+      heldBlock,
       adv.exhausted && adv.exhausted.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'No setup route left: drive around it' }),
-        h('ul', { class: 'plain' }, adv.exhausted.map((e) => h('li', {}, [h('b', { text: e.finding + ': ' }), e.tips.length ? e.tips.slice(0, 2).join(' ') : 'allow one of the contested changes again.']))),
+        h('ul', { class: 'plain' }, adv.exhausted.map((e) => h('li', {}, [h('b', { text: e.finding + ': ' }), (e.why ? e.why + ' ' : '') + (e.tips.length ? e.tips.slice(0, 2).join(' ')
+          : e.held ? 'every change for this would make another part of the corner worse.' : 'allow one of the contested changes again.')]))),
         h('button', { class: 'link', type: 'button', text: 'Open driving technique', onclick: () => { A().state.tab = 'technique'; A().renderAll(); } })]) : null,
       s.setup && adv.suggestions.length ? h('div', { class: 'actions' }, [nameIn, h('button', { class: 'btn', type: 'button', text: 'Save ticked changes as a new setup', onclick: async () => {
         const picked = adv.suggestions.filter((x) => checked[x.key]);
@@ -539,16 +650,87 @@
     if (learnt) view().appendChild(learnt);
 
     view().appendChild(h('section', { class: 'panel' }, [
-      h('h2', { text: 'What the telemetry shows' }),
+      h('h2', { text: notes.felt.length ? 'What the telemetry shows, and what you felt' : 'What the telemetry shows' }),
       an.findings.length ? h('div', { class: 'findings compact' }, an.findings.map((f) => h('article', { class: 'finding' }, [
-        h('div', { class: 'finding-head' }, [h('h3', { text: f.title }), confTag(f.confidence)]),
-        h('p', {}, [f.detail + ' ', h('span', { class: 'evidence', text: f.evidence })]),
+        h('div', { class: 'finding-head' }, [h('h3', { text: f.title }), f.felt ? h('span', { class: 'tag-you', text: 'You felt' }) : f.agreed ? h('span', { class: 'tag-you', text: 'Measured and felt' }) : null, confTag(f.confidence)]),
+        h('p', {}, [f.detail + ' ', f.causeText ? f.causeText + ' ' : '', h('span', { class: 'evidence', text: f.evidence })]),
       ]))) : h('p', { class: 'empty', text: 'Nothing stands out in these laps.' }),
+      an.setAside && an.setAside.length ? h('div', { class: 'skipped' }, [h('h3', { text: 'Set aside: you felt otherwise' }),
+        h('ul', { class: 'plain' }, an.setAside.map((f) => h('li', {}, [h('b', { text: f.title + ' (telemetry): ' }), 'you felt ' + lower(f.because.title) + '. Your feel is used.'])))]) : null,
       an.notes.length ? h('ul', { class: 'notes' }, an.notes.map((n) => h('li', { text: n }))) : null,
       balance,
     ]));
 
     if (s.setup) view().appendChild(limitsPanel(s, adv));
+  }
+
+  /* What the driver felt in this run, and the changes they want to try, with the app's verdict on each. */
+  function feelPanel(s, an, notes, adv) {
+    const F = STA.feel, AD = STA.advisor, u = ui(), f = u.feelForm || (u.feelForm = { kind: 'understeer', phase: 'entry', band: 'all', amount: 1, axle: 'front' });
+    const again = () => { u.adviceChecked = null; render(); };
+    const bal = F.BALANCE[f.kind], words = (x) => (x.amount === 2 ? 'a lot' : 'a little');
+    const feltText = (x) => (x.kind === 'good' ? 'Felt good, no complaints' : (F.findingOf(x) || { title: x.kind }).title + (x.kind === 'balanced' ? '' : ', ' + words(x)));
+    const opt = (list, now) => list.map(([v, t]) => h('option', { value: v, selected: String(v) === String(now), text: t }));
+    const pick = (key, label, list, cls) => h('label', { class: cls || '' }, [label, h('select', { onchange: (ev) => { f[key] = ev.target.value; if (key === 'kind') render(); } }, opt(list, f[key]))]);
+    const addFelt = () => {
+      const x = { kind: f.kind };
+      if (bal) { x.phase = f.phase; x.band = f.band; }
+      if (f.kind === 'bottoming') x.axle = f.axle;
+      if (f.kind !== 'balanced' && f.kind !== 'good') x.amount = +f.amount === 2 ? 2 : 1;
+      STA.library.feel.addFelt(s.id, x); again();
+    };
+    const feltList = notes.felt.length ? h('ul', { class: 'plain felt' }, notes.felt.map((x, i) => h('li', {}, [feltText(x) + ' ',
+      h('button', { class: 'link', type: 'button', text: 'Remove', 'aria-label': 'Remove: ' + feltText(x), onclick: () => { STA.library.feel.removeFelt(s.id, i); again(); } })])))
+      : h('p', { class: 'empty', text: 'Nothing noted yet for this run.' });
+    const feltForm = h('div', { class: 'form' }, [
+      pick('kind', 'What', F.KINDS, 'wide'),
+      bal ? pick('phase', 'Where', [['entry', 'Corner entry'], ['mid', 'Mid-corner'], ['exit', 'Corner exit']]) : null,
+      bal ? pick('band', 'Corners', F.BANDS.map(([v, t]) => [v, t.replace(/^./, (c) => c.toUpperCase())])) : null,
+      f.kind === 'bottoming' ? pick('axle', 'Where', [['front', 'Front'], ['rear', 'Rear']]) : null,
+      f.kind !== 'balanced' && f.kind !== 'good' ? pick('amount', 'How much', [[1, 'A little'], [2, 'A lot']]) : null,
+      h('button', { class: 'btn ghost', type: 'button', text: 'Add', onclick: addFelt }),
+    ]);
+
+    // Settings this car has that the app knows how to reason about, one entry per end of the car.
+    const settings = [];
+    if (s.setup) for (const role of Object.keys(AD.ROLE)) for (const axle of AD.ROLE[role].fixedAxle ? [null] : ['front', 'rear', null]) {
+      const ps = STA.setup.byRole(s.setup, role, axle || undefined);
+      if (!ps.length || (axle === null && !AD.ROLE[role].fixedAxle && ps.some((p) => p.axle))) continue;
+      settings.push({ id: role + '|' + (axle || ''), role, axle, label: AD.labelFor(role, axle) });
+    }
+    const g = u.ideaForm || (u.ideaForm = {});
+    if (!settings.some((x) => x.id === g.setting)) g.setting = settings.length ? settings[0].id : '';
+    const cur = settings.find((x) => x.id === g.setting);
+    if (g.dir !== '+' && g.dir !== '-') g.dir = '-';
+    const aims = notes.felt.filter((x) => x.kind !== 'good' && x.kind !== 'balanced').map((x) => [F.feltKey(x), 'For: ' + lower(F.findingOf(x).title)]).concat([['pace', 'For: lap time'], ['none', 'Just trying it']]);
+    if (!aims.some(([v]) => v === g.for)) g.for = aims[0][0];
+    const addIdea = () => { if (!cur) return; STA.library.feel.addIdea(s.id, { role: cur.role, axle: cur.axle, dir: g.dir, for: g.for }); again(); };
+    const VERDICT = { good: ['good', 'Good idea'], try: ['warn', 'Worth one run'], against: ['bad', 'Held back'], impossible: ['bad', 'Not possible'] };
+    const judged = adv.ideas || [];
+    const ideaList = notes.ideas.length ? h('ul', { class: 'plain ideas' }, notes.ideas.map((x, i) => {
+      const j = judged.find((k) => k.idea === x) || judged.find((k) => k.role === x.role && (k.axle || null) === (x.axle || null) && k.dir === x.dir);
+      const t = AD.ROLE[x.role] ? AD.titleFor(x.role, x.dir, x.axle || null) : x.role, v = j ? VERDICT[j.verdict] : null;
+      const aim = x.for === 'pace' ? 'lap time' : x.for === 'none' ? 'just trying it' : (() => { const it = notes.felt.find((y) => F.feltKey(y) === x.for); return it ? lower(F.findingOf(it).title) : 'a feeling no longer noted'; })();
+      return h('li', {}, [
+        h('div', {}, [h('b', { text: t }), h('span', { class: 'evidence', text: ' · for ' + aim + ' ' }), v ? h('span', { class: 'tags' }, [h('span', { class: 'tag ' + v[0], text: v[1] })]) : null]),
+        j ? h('p', { class: 'why', text: j.reasons.join(' ') + (j.instead ? ' Instead: ' + lower(j.instead) + '.' : '') + (j.merged ? ' Number ' + j.merged.rank + ' below.' : '') + (j.alsoApp ? ' The app lists it too (number ' + j.alsoApp.rank + '), marked as working against this.' : '') }) : h('p', { class: 'why', text: s.setup ? 'Not a setting the app can check on this car.' : 'No setup in this file, so it cannot be checked.' }),
+        h('button', { class: 'link', type: 'button', text: 'Remove', 'aria-label': 'Remove idea: ' + t, onclick: () => { STA.library.feel.removeIdea(s.id, i); again(); } }),
+      ]);
+    })) : h('p', { class: 'empty', text: 'No ideas noted for this run.' });
+    const ideaForm = settings.length ? h('div', { class: 'form' }, [
+      h('label', { class: 'wide' }, ['Setting', h('select', { onchange: (ev) => { g.setting = ev.target.value; render(); } }, settings.map((x) => h('option', { value: x.id, selected: x.id === g.setting, text: x.label })))]),
+      cur ? h('label', {}, ['Change', h('select', { onchange: (ev) => { g.dir = ev.target.value; } }, opt([['+', AD.titleFor(cur.role, '+', cur.axle)], ['-', AD.titleFor(cur.role, '-', cur.axle)]], g.dir))]) : null,
+      h('label', {}, ['Why', h('select', { onchange: (ev) => { g.for = ev.target.value; } }, opt(aims, g.for))]),
+      h('button', { class: 'btn ghost', type: 'button', text: 'Add', onclick: addIdea }),
+    ]) : null;
+    return h('section', { class: 'panel' }, [
+      h('h2', { text: 'What you felt, and what you want to try' }),
+      h('p', { class: 'hint', text: 'For this run (' + A().whenText(s.meta.recordedAt) + '). Where your feel and the telemetry disagree, your feel is used. Note it after every run: that is how the app learns which changes worked.' }),
+      h('div', { class: 'feel-cols' }, [
+        h('div', {}, [h('h3', { text: 'How the car felt' }), feltList, feltForm]),
+        h('div', {}, [h('h3', { text: 'Changes you want to try' }), ideaList, s.setup ? ideaForm : h('p', { class: 'hint', text: 'This file has no setup, so ideas cannot be checked.' })]),
+      ]),
+    ]);
   }
 
   /* Changes the driver has contested on this car, each with a way to allow it again. */
@@ -563,7 +745,7 @@
   /* Did the change made before this session do what it was meant to?
      Each change is treated as an experiment: why it was made, what happened, and what the app now thinks. */
   function reviewPanel(s) {
-    const st = A().state, R = STA.library.reasons, rv = STA.learning.review(st.summaries, st.setups, s, R.all());
+    const st = A().state, R = STA.library.reasons, rv = STA.learning.review(st.summaries, st.setups, s, R.all(), STA.library.feel.all());
     const head = h('h2', { text: 'Did the last change work?' });
     if (!rv || rv.first) return null;
     const laps = (b, a) => 'Typical lap ' + U.fmtLap(b.medianLap || b.bestLap) + ' → ' + U.fmtLap(a.medianLap || a.bestLap);
@@ -571,21 +753,20 @@
     const verdict = { helped: 'Helped', none: 'No clear difference', hurt: 'Worse' };
     const again = () => { A().state.analysis.delete(s.id); ui().adviceChecked = null; render(); };
     const rows = rv.changes.map((c) => {
-      const inferred = c.why === 'pace' ? 'App\'s reading: ' + lower(c.purpose) : c.why === 'app' ? 'App\'s reading: ' + c.targets.map((t) => lower(t.title)).join('; ') : 'Not known: what was it for?';
+      const forWhat = c.targets.filter((t) => t.kind !== 'pace').map((t) => lower(t.title)).join('; ');
+      const why = c.yours ? 'Your idea: ' + (c.why === 'pace' ? 'lap time' : c.why === 'none' ? 'just trying it' : forWhat || 'no reason given')
+        : c.why === 'driver' ? 'Your answer: ' + forWhat : c.why === 'pace' ? 'App\'s reading: ' + lower(c.purpose) : c.why === 'app' ? 'App\'s reading: ' + forWhat : c.why === 'none' ? 'Just trying it' : 'No reason on record';
       // Lap time where the change acts comes first; then top speed for wing changes; then the handling problem.
       const got = [];
       if (c.time) got.push(h('b', { text: STA.pace.secs(c.time.net) }), ' where it acts' + (c.time.parts.some((p) => Math.abs(p.d) >= 0.01) ? ': ' + c.time.text : ''));
       if (c.top && Math.abs(A().speed(c.top.d)) >= 0.5) got.push((got.length ? '. ' : '') + 'Top speed ' + (c.top.d > 0 ? '+' : '−') + Math.abs(A().speed(c.top.d)).toFixed(0) + ' ' + A().speedUnit());
       const probs = c.targets.filter((t) => t.kind !== 'pace');
-      if (probs.length) got.push((got.length ? '. ' : '') + probs.map((t) => lower(t.title) + ' ' + t.text).join('; '));
+      if (probs.length) got.push((got.length ? '. ' : '') + probs.map((t) => lower(t.title) + (t.byFeel ? ': ' : ' ') + t.text).join('; '));
       return {
         change: h('span', {}, [c.title, h('span', { class: 'evidence', text: ' ' + c.from + ' → ' + c.to })]),
-        why: h('select', { class: 'mini', 'aria-label': 'What was this change for? ' + c.title, onchange: (ev) => { R.set(rv.after.id, c.key, { target: ev.target.value || null }); again(); } },
-          [h('option', { value: '', selected: !c.note.target, text: inferred })].concat(rv.choices.map((o) => h('option', { value: o.value, selected: c.note.target === o.value, text: o.label })))),
+        why,
         got: got.length ? h('span', {}, got) : '–',
-        verdict: h('span', {}, [h('span', { class: 'verdict ' + c.verdict, text: c.overshot && c.verdict === 'helped' ? 'Helped, too far' : verdict[c.verdict] }),
-          h('select', { class: 'mini', 'aria-label': 'Your own verdict on: ' + c.title, title: 'Overrule the telemetry if you felt otherwise', onchange: (ev) => { R.set(rv.after.id, c.key, { verdict: ev.target.value || null }); again(); } },
-            [['', 'Telemetry\'s call'], ['helped', 'I say: helped'], ['none', 'I say: no difference'], ['hurt', 'I say: worse']].map(([v, t]) => h('option', { value: v, selected: (c.note.verdict || '') === v, text: t })))]),
+        verdict: h('span', { class: 'verdict ' + c.verdict, text: c.overshot && c.verdict === 'helped' ? 'Helped, too far' : verdict[c.verdict] }),
         think: c.rethink,
       };
     });
@@ -600,8 +781,9 @@
         U.fmtLap(rv.pace.lapBefore) + ' → ' + U.fmtLap(rv.pace.lapAfter) + ' (' + STA.pace.secs(rv.pace.lap) + '). ' +
         (STA.pace.ZONES.filter((z) => Math.abs(rv.pace.zones[z]) >= 0.01).sort((a, b) => Math.abs(rv.pace.zones[b]) - Math.abs(rv.pace.zones[a])).map((z) => STA.pace.ZONE_TEXT[z] + ' ' + STA.pace.secs(rv.pace.zones[z])).join(', ') || 'No zone moved by a hundredth') +
         '. Top speed ' + A().speed(rv.pace.top.before).toFixed(0) + ' → ' + A().speed(rv.pace.top.after).toFixed(0) + ' ' + A().speedUnit() + '.']) : null,
-      unknown ? h('p', { class: 'instead', text: unknown + (unknown === 1 ? ' change has' : ' changes have') + ' no reason on record. Say what ' + (unknown === 1 ? 'it was' : 'each was') + ' for under "Why" and the app will judge it against that.' }) : null,
-      rows.length ? table([{ key: 'change', label: 'Changed' }, { key: 'why', label: 'Why' }, { key: 'got', label: 'Lap time and effect' }, { key: 'verdict', label: 'Result' }, { key: 'think', label: 'What the app makes of it' }], rows, { cls: 'review' })
+      unknown ? h('p', { class: 'hint', text: (unknown === 1 ? 'One change has' : unknown + ' changes have') + ' no reason on record, so ' + (unknown === 1 ? 'it is' : 'they are') + ' judged on lap time. Note your ideas with what they are for before a run, and the app judges them against that.' }) : null,
+      rv.feltBefore && !rv.feltAfter ? h('p', { class: 'instead', text: 'You noted how the car felt in the run before. Note how it felt in this run too, and the changes aimed at what you felt are judged by that.' }) : null,
+      rows.length ? table([{ key: 'change', label: 'Changed' }, { key: 'why', label: 'What it was for' }, { key: 'got', label: 'Lap time and effect' }, { key: 'verdict', label: 'Result' }, { key: 'think', label: 'What the app makes of it' }], rows, { cls: 'review' })
         : h('p', { class: 'empty', text: 'Only settings the app does not judge changed (fuel, gearing, cooling).' }),
       rv.bonus.length ? h('ul', { class: 'plain gains' }, rv.bonus.map((b) => h('li', {}, [h('b', { text: 'Unexpected gain: ' }), lower(b.title) + ' ' + b.text + ', with nothing aimed at it. Credited to ' + b.credit.map(titleOf).join('; ') + '. ' +
         (b.credit.length === 1 ? 'Now offered for this problem on this car.' : 'Shared between ' + b.credit.length + ' changes, so it needs a second run to count.')]))) : null,
@@ -713,6 +895,7 @@
       tech.notes.length ? h('ul', { class: 'notes' }, tech.notes.map((n) => h('li', { text: n }))) : null,
       tech.items.length ? more('measured', 'How these are measured', [h('ul', { class: 'plain' }, tech.items.map((x) => h('li', {}, [h('b', { text: x.title + ': ' }), x.evidence])))]) : null,
     ]));
+    if (an.tyreTemps) view().appendChild(tyrePanel(s, an.tyreTemps));
     const withTips = an.findings.map((f) => ({ f, tips: STA.technique.forFinding(f) })).filter((x) => x.tips.length);
     view().appendChild(h('section', { class: 'panel' }, [
       h('h2', { text: 'Driving around the car' }),
@@ -726,6 +909,90 @@
       })) : h('p', { class: 'empty', text: 'No handling problem found, so nothing to drive around.' }),
     ]));
   }
+
+  /* Tyre temperatures: the window, where each tyre heats up, and how the runs warmed up. */
+  function tyrePanel(s, info) {
+    const T = STA.tyres, sim = s.meta.sim, car = s.meta.car, win = info.win, W = STA.WHEELS;
+    const cap = (t) => String(t).replace(/^./, (c) => c.toUpperCase());
+    const name = (w) => cap(T.WHEEL_TEXT[W[w]]);
+    const again = () => { A().state.analysis.delete(s.id); render(); };
+    const f = ui().tyreForm || (ui().tyreForm = {});
+    const lo = h('input', { type: 'number', class: 'text num-in', min: 20, max: 200, step: 1, value: f.lo != null ? f.lo : win.lo, 'aria-label': 'Lowest working temperature, °C', oninput: (ev) => { f.lo = ev.target.value; } });
+    const hi = h('input', { type: 'number', class: 'text num-in', min: 30, max: 240, step: 1, value: f.hi != null ? f.hi : win.hi, 'aria-label': 'Highest working temperature, °C', oninput: (ev) => { f.hi = ev.target.value; } });
+    const msg = h('span', { class: 'hint' });
+    const form = h('div', { class: 'row-form' }, [h('span', { text: 'Working window for the ' + car + ': ' }), lo, h('span', { text: ' to ' }), hi, h('span', { text: ' °C ' }),
+      h('button', { class: 'btn', type: 'button', text: 'Save window', onclick: () => {
+        if (STA.library.tyreWindow.set(sim, car, lo.value, hi.value)) { ui().tyreForm = {}; again(); } else msg.textContent = 'Enter a lower and a higher temperature, for example 80 and 100.';
+      } }),
+      win.mine ? h('button', { class: 'link', type: 'button', text: 'Use the general guide (' + T.DEFAULT.lo + '–' + T.DEFAULT.hi + ' °C)', onclick: () => { STA.library.tyreWindow.clear(sim, car); ui().tyreForm = {}; again(); } }) : null, msg]);
+    const winText = win.mine ? 'Your window for this car: ' + win.lo + '–' + win.hi + ' °C.'
+      : 'Using a general guide of ' + win.lo + '–' + win.hi + ' °C. The right window depends on the car and compound' + (sim === 'lmu' ? '; Le Mans Ultimate shows the ideal temperature for each compound in the pit menu.' : '.');
+
+    // How the tyres sit against the window
+    let status;
+    if (info.mode === 'window') {
+      status = info.shares ? table([{ key: 'w', label: 'Tyre' }, { key: 'avg', label: 'Average, °C', num: true }, { key: 'b', label: 'Under the window', num: true }, { key: 'i', label: 'In it', num: true }, { key: 'o', label: 'Over it', num: true }],
+        info.shares.map((x, w) => ({ w: name(w), avg: U.fmt(x.avg, 0), b: U.fmt(x.below * 100, 0) + '%', i: U.fmt(x.inside * 100, 0) + '%', o: U.fmt(x.above * 100, 0) + '%' })))
+        : h('p', { class: 'empty', text: 'No complete lap to measure.' });
+    } else if (info.reading) {
+      const word = { cold: 'Under the window', in: 'In the window', hot: 'Over the window' };
+      status = h('div', {}, [h('p', { class: 'hint', text: 'Carcass readings iRacing took in the pits after lap ' + info.reading.afterLap + '. These are the temperatures the window refers to.' }),
+        table([{ key: 'w', label: 'Tyre' }, { key: 'in', label: 'Inner, °C', num: true }, { key: 'mid', label: 'Middle, °C', num: true }, { key: 'out', label: 'Outer, °C', num: true }, { key: 'avg', label: 'Average, °C', num: true }, { key: 'v', label: 'Against the window' }],
+          info.reading.rows.map((x, w) => ({ w: name(w), in: U.fmt(x.inner, 0), mid: U.fmt(x.mid, 0), out: U.fmt(x.outer, 0), avg: U.fmt(x.avg, 0), v: word[info.reading.verdict[w]] })))]);
+    } else status = h('p', { class: 'empty', text: 'iRacing took no tyre readings in the pits after these laps, so the app cannot tell whether they reached the window. Stop in your pit box after a run: iRacing takes the readings there.' });
+
+    // Where each tyre heats up
+    const spots = info.spots.length ? h('div', { class: 'findings compact' }, info.spots.map((x) => h('article', { class: 'finding' }, [
+      h('div', { class: 'finding-head' }, [h('h3', { text: x.corner + ', ' + T.WHEEL_TEXT[x.wheel] + ' tyre' })]),
+      h('p', {}, [info.mode === 'window'
+        ? 'Reaches ' + x.peak.toFixed(0) + ' °C, over the ' + win.hi + ' °C top of the window, mostly ' + (x.phase === 'braking' ? 'under braking' : x.phase === 'exit' ? 'on the way out' : 'in the middle of the corner') + '. '
+        : 'Heats up ' + x.excess.toFixed(0) + ' °C over its lap average (to ' + x.peak.toFixed(0) + ' °C on the surface); in a typical corner it gains ' + Math.max(0, x.typical).toFixed(0) + ' °C. Mostly ' + (x.phase === 'braking' ? 'under braking' : x.phase === 'exit' ? 'on the way out' : 'in the middle of the corner') + '. ',
+      h('span', { class: 'evidence', text: 'Seen on ' + x.laps + ' of ' + x.of + ' laps.' })]),
+      h('p', {}, [h('b', { text: 'Try: ' }), x.tip]),
+      s.ch.x || s.ch.lat ? h('button', { class: 'link', type: 'button', text: 'Show on the map', onclick: () => { ui().mapMode = 'tyres'; ui().mapView = '2d'; ui().tyreWheel = x.w; A().state.tab = 'map'; A().renderAll(); } }) : null,
+    ]))) : h('p', { class: 'empty', text: info.mode === 'window'
+      ? 'No tyre goes over the window in a corner. Le Mans Ultimate\'s tyre temperatures change slowly, so short spikes would not show.'
+      : 'No corner stands out: each tyre heats up about as much in every corner.' });
+
+    // Each run: when the tyres came in
+    // runs too short to say anything are left out, unless there is nothing else
+    const long = info.runs.filter((r) => r.laps.length >= 2 && !(r.warmAt == null && r.short && info.mode !== 'window'));
+    const runs = long.length ? long : info.runs.filter((r) => r.laps.length >= 2);
+    const list = (a) => (a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1]);
+    const runText = (r) => {
+      const first = r.laps[0], n = r.laps.length;
+      const head = 'Run from lap ' + first.num + ' (' + n + ' laps): ';
+      if (r.warmAt == null) {
+        if (info.mode !== 'window' && r.short) return head + 'too few clean laps to tell when the tyres came in.';
+        const w = r.lastWheel, end = r.laps[n - 1].temps[w];
+        return head + (w >= 0 ? 'the ' + T.WHEEL_TEXT[W[w]] + ' never reached ' + (info.mode === 'window' ? 'the window' : 'its working temperature') + ' (' + end.toFixed(0) + ' °C on the last lap).' : 'the tyres never settled.')
+          + (r.coldPushed.length ? ' Lap' + (r.coldPushed.length > 1 ? 's ' : ' ') + list(r.coldPushed.map((x) => x.num)) + (r.coldPushed.length > 1 ? ' were' : ' was') + ' within 3% of your best on those tyres.' : '');
+      }
+      const lap = r.laps[r.warmAt];
+      return head + 'all four came in on lap ' + lap.num + ', the ' + ordinal(r.warmAt + 1) + ' lap of the run' + (r.lastWheel >= 0 ? ' (the ' + T.WHEEL_TEXT[W[r.lastWheel]] + ' was last)' : '') + '.'
+        + (r.coldPushed.length ? ' Lap' + (r.coldPushed.length > 1 ? 's ' : ' ') + list(r.coldPushed.map((x) => x.num)) + (r.coldPushed.length > 1 ? ' were' : ' was') + ' within 3% of your best before then.' : '');
+    };
+    const runTable = (r) => table([{ key: 'l', label: 'Lap' }, { key: 't', label: 'Time', num: true }].concat(W.map((w) => ({ key: w, label: w + ', °C', num: true }))),
+      r.laps.map((x, k) => Object.assign({ l: x.num + (k === r.warmAt ? ' (in)' : ''), t: x.time ? U.fmtLap ? U.fmtLap(x.time) : x.time.toFixed(3) : (x.pit ? 'pit lane' : 'part lap') }, ...W.map((w, i) => ({ [w]: U.fmt(x.temps[i], 0) })))));
+    const warm = h('div', {}, [
+      runs.length ? h('ul', { class: 'plain' }, runs.map((r) => h('li', { text: runText(r) }))) : h('p', { class: 'empty', text: 'No run long enough to see the tyres warm up.' }),
+      runs.length ? more('tyre-runs', 'Tyre temperature lap by lap', runs.map((r) => h('div', {}, [h('p', { class: 'hint', text: 'Run from lap ' + r.laps[0].num + '. Average over the lap while driving' + (info.mode === 'window' ? '.' : '; "in" marks the lap all four reached the temperature they settle at on this run.') }), runTable(r)]))) : null,
+    ]);
+    const rt = info.routine;
+    const routine = h('ol', { class: 'steps' }, rt.steps.map((x) => h('li', {}, [h('b', { text: x.title + '. ' }), x.text])));
+
+    return h('section', { class: 'panel' }, [
+      h('h2', { text: 'Tyre temperatures' }),
+      h('p', { class: 'hint', text: winText + (info.mode === 'window' ? '' : ' iRacing\'s surface temperatures on track read well under its pit readings, so on track each tyre is compared with its own lap.') }),
+      form,
+      h('h3', { class: 'sub', text: 'Against the window' }), status,
+      h('h3', { class: 'sub', text: 'Where the tyres heat up most' }), spots,
+      h('h3', { class: 'sub', text: 'Warming up' }), warm,
+      h('h3', { class: 'sub', text: 'Warm-up routine' }), routine,
+      h('p', { class: 'hint', text: 'The braking advice comes from a back-to-back test in iRacing (simracingcockpit.gg): hard braking into corners raised tyre temperature more than weaving, and stop-and-go did not help. How long a car takes to warm up is from your own runs where the recording shows it.' }),
+    ]);
+  }
+  const ordinal = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th'));
 
   /* ---------- Baseline setup ---------- */
 

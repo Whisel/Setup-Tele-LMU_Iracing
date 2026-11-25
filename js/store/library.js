@@ -114,13 +114,17 @@
   async function removeSession(id) { await (await open()).del('sessions', id); }
 
   async function exportAll() {
-    return { app: 'setup-telemetry', version: 1, exportedAt: new Date().toISOString(), setups: await setups(), sessions: await sessions(), blocked: blockedAll(), reasons: reasonsAll() };
+    return { app: 'setup-telemetry', version: 1, exportedAt: new Date().toISOString(), setups: await setups(), sessions: await sessions(), blocked: blockedAll(), feel: feelAll(), reasons: reasonsAll() };
   }
   async function importAll(data) {
     if (!data || data.app !== 'setup-telemetry' || !Array.isArray(data.setups)) throw new Error('This is not a library export from this app.');
     const b = await open();
     for (const s of data.setups) if (s && s.id && Array.isArray(s.params)) await b.put('setups', s);
     for (const s of data.sessions || []) if (s && s.id) await b.put('sessions', s);
+    if (data.feel && typeof data.feel === 'object') {
+      for (const sid of Object.keys(data.feel)) if (data.feel[sid] && Array.isArray(data.feel[sid].felt) && !feelAll()[sid]) feelAll()[sid] = data.feel[sid];
+      feelSave();
+    }
     if (data.reasons && typeof data.reasons === 'object') {
       for (const sid of Object.keys(data.reasons)) if (data.reasons[sid] && typeof data.reasons[sid] === 'object') reasonsAll()[sid] = Object.assign({}, data.reasons[sid], reasonsAll()[sid]);
       reasonsSave();
@@ -129,13 +133,13 @@
       for (const k of Object.keys(data.blocked)) {
         if (!Array.isArray(data.blocked[k])) continue;
         const have = new Set((blockedAll()[k] || []).map((e) => JSON.stringify(e)));
-        blockedAll()[k] = (blockedAll()[k] || []).concat(data.blocked[k].filter((e) => (typeof e === 'string' || isLimit(e) || isContest(e)) && !have.has(JSON.stringify(e))));
+        blockedAll()[k] = (blockedAll()[k] || []).concat(data.blocked[k].filter((e) => (typeof e === 'string' || isLimit(e) || isContest(e) || isWindow(e)) && !have.has(JSON.stringify(e))));
       }
       blockedSave();
     }
     return { setups: data.setups.length, sessions: (data.sessions || []).length };
   }
-  async function clearAll() { const b = await open(); await b.clear('setups'); await b.clear('sessions'); blocked.clear(); reasons.clear(); }
+  async function clearAll() { const b = await open(); await b.clear('setups'); await b.clear('sessions'); blocked.clear(); reasons.clear(); feel.clear(); }
 
   /* What the driver has said about a setup change: what it was for, and their own verdict.
      Keyed by the session the change led into, then by the change ("role|axle|dir"). */
@@ -158,6 +162,38 @@
       reasonsSave();
     },
     clear: () => { reasonsMem = {}; reasonsSave(); },
+  };
+
+  /* What the driver felt in a run and the changes they want to try (see analysis/feel.js).
+     Keyed by session: { felt: [{ kind, phase, band, axle, amount }], ideas: [{ role, axle, dir, for }] }. */
+  let feelMem = null;
+  function feelAll() {
+    if (feelMem) return feelMem;
+    try { feelMem = JSON.parse(root.localStorage.getItem('sta-feel') || '{}') || {}; } catch (e) { feelMem = {}; }
+    return feelMem;
+  }
+  function feelSave() { try { root.localStorage.setItem('sta-feel', JSON.stringify(feelAll())); } catch (e) { /* memory only */ } }
+  const sameFelt = (a, b) => a.kind === b.kind && (a.phase || '') === (b.phase || '') && (a.band || '') === (b.band || '') && (a.axle || '') === (b.axle || '');
+  const sameIdea = (a, b) => a.role === b.role && (a.axle || '') === (b.axle || '');
+  const feel = {
+    all: () => feelAll(),
+    get: (sessionId) => { const n = feelAll()[sessionId]; return { felt: (n && n.felt) || [], ideas: (n && n.ideas) || [] }; },
+    put: (sessionId, notes) => {
+      const n = { felt: (notes.felt || []).slice(), ideas: (notes.ideas || []).slice() };
+      if (n.felt.length || n.ideas.length) feelAll()[sessionId] = Object.assign(n, { at: Date.now() }); else delete feelAll()[sessionId];
+      feelSave();
+    },
+    // One of each: a new note about the same thing replaces the old one ("good" clears the complaints, and the other way round).
+    addFelt: (sessionId, x) => {
+      const n = feel.get(sessionId);
+      n.felt = n.felt.filter((y) => !sameFelt(x, y) && !(x.kind === 'good') && !(y.kind === 'good'));
+      if (x.kind === 'understeer' || x.kind === 'oversteer' || x.kind === 'balanced') n.felt = n.felt.filter((y) => !((y.kind === 'understeer' || y.kind === 'oversteer' || y.kind === 'balanced') && y.phase === x.phase && y.band === x.band));
+      n.felt.push(x); feel.put(sessionId, n);
+    },
+    removeFelt: (sessionId, i) => { const n = feel.get(sessionId); n.felt.splice(i, 1); feel.put(sessionId, n); },
+    addIdea: (sessionId, x) => { const n = feel.get(sessionId); n.ideas = n.ideas.filter((y) => !sameIdea(x, y)); n.ideas.push(x); feel.put(sessionId, n); },
+    removeIdea: (sessionId, i) => { const n = feel.get(sessionId); n.ideas.splice(i, 1); feel.put(sessionId, n); },
+    clear: () => { feelMem = {}; feelSave(); },
   };
 
   /* Changes the driver has marked as "not possible on this car", per sim and car.
@@ -201,9 +237,21 @@
     remove: (sim, car, paramId, dir, whenNum) => put(sim, car, entries(sim, car).filter((x) => !(isLimit(x) && sameLimit(x, { paramId, dir, when: whenNum == null ? null : { num: whenNum } })))),
   };
 
+  // { tyreWindow: { lo, hi }, at }: the tyre temperature window the driver set for the car.
+  const isWindow = (e) => e && typeof e === 'object' && e.tyreWindow && typeof e.tyreWindow === 'object';
+  const tyreWindow = {
+    get: (sim, car) => { const e = entries(sim, car).find(isWindow); return e ? { lo: e.tyreWindow.lo, hi: e.tyreWindow.hi, at: e.at } : null; },
+    set: (sim, car, lo, hi) => {
+      lo = +lo; hi = +hi;
+      if (!(lo > 0 && hi > lo && hi < 250)) return false;
+      put(sim, car, entries(sim, car).filter((x) => !isWindow(x)).concat({ tyreWindow: { lo, hi }, at: Date.now() })); return true;
+    },
+    clear: (sim, car) => put(sim, car, entries(sim, car).filter((x) => !isWindow(x))),
+  };
+
   const sameCar = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
   const sameTrack = (a, b) => U.slug(a) === U.slug(b) && U.slug(a) !== '';
 
-  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked, limits, contested, reasons, raw: open,
+  STA.library = { open, saveSetup, recordUse, updateSetup, setups, sessions, saveSession, removeSetup, removeSession, exportAll, importAll, clearAll, sameCar, sameTrack, blocked, limits, contested, reasons, feel, tyreWindow, raw: open,
     get persistent() { return backend ? backend.persistent : null; } };
 })(typeof window !== 'undefined' ? window : globalThis);

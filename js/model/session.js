@@ -44,19 +44,38 @@
       return arr.every(Boolean) ? arr : null;
     };
     /* Tyre temperatures: on the left side of the car the tyre's left edge is the
-       outer edge; on the right side it is the inner edge. Prefer carcass temps. */
+       outer edge; on the right side it is the inner edge. iRacing records two sets:
+       surface temperatures (tempL/M/R), which change all the time on track, and
+       carcass temperatures (tempCL/CM/CR), which in the files checked so far only
+       change in the pits. Use the surface set when it moves on track; otherwise
+       fall back to whichever set the file has. */
+    const changes = (a) => { if (!a) return 0; let c = 0; for (let i = 1; i < a.length; i += 1) if (a[i] !== a[i - 1]) c++; return c; };
+    const surfLive = ['LF', 'RF', 'LR', 'RR'].every((w) => changes(v(w + 'tempM')) > Math.max(50, n * 0.02));
     const temps = (pos) => {
-      const pick = (w, side) => f32(v(w + 'tempC' + side)) || f32(v(w + 'temp' + side));
+      const pick = (w, side) => (surfLive ? f32(v(w + 'temp' + side)) : f32(v(w + 'tempC' + side)) || f32(v(w + 'temp' + side)));
       const map = { I: { LF: 'R', RF: 'L', LR: 'R', RR: 'L' }, M: { LF: 'M', RF: 'M', LR: 'M', RR: 'M' }, O: { LF: 'L', RF: 'R', LR: 'L', RR: 'R' } }[pos];
       const arr = ['LF', 'RF', 'LR', 'RR'].map((w) => pick(w, map[w]));
       return arr.every(Boolean) ? arr : null;
     };
+    /* The carcass readings iRacing takes when the car stops in the pits (or is reset):
+       one entry each time they change, as inner/middle/outer per wheel (FL, FR, RL, RR). */
+    const tyreReadings = [];
+    if (surfLive && ['LF', 'RF', 'LR', 'RR'].every((w) => v(w + 'tempCL') && v(w + 'tempCM') && v(w + 'tempCR'))) {
+      const c = {}; for (const w of ['LF', 'RF', 'LR', 'RR']) for (const x of ['L', 'M', 'R']) c[w + x] = v(w + 'tempC' + x);
+      const at = (i) => ['LF', 'RF', 'LR', 'RR'].map((w) => {
+        const left = w[0] === 'L';
+        return { inner: c[w + (left ? 'R' : 'L')][i], mid: c[w + 'M'][i], outer: c[w + (left ? 'L' : 'R')][i] };
+      });
+      const key = (i) => Object.keys(c).map((k) => c[k][i]).join(',');
+      let last = key(0); tyreReadings.push({ i: 0, rows: at(0) });
+      for (let i = 1; i < n; i++) { const k = key(i); if (k !== last) { last = k; tyreReadings.push({ i, rows: at(i) }); } }
+    }
 
     const ch = {
       t, speed: f32(v('Speed')), throttle: f32(v('Throttle')), throttleRaw: f32(v('ThrottleRaw')), brake: f32(v('Brake')), clutch: f32(v('Clutch')),
       steer: scale(v('SteeringWheelAngle'), 180 / Math.PI), gear: f32(v('Gear')), rpm: f32(v('RPM')),
       latG: scale(v('LatAccel'), 1 / G), longG: scale(v('LongAccel'), 1 / G), vertG: scale(v('VertAccel'), 1 / G),
-      yawRate: f32(v('YawRate')), yawNorth: f32(v('YawNorth')), lat: v('Lat'), lon: v('Lon'),
+      yawRate: f32(v('YawRate')), yawNorth: f32(v('YawNorth')), lat: v('Lat'), lon: v('Lon'), alt: f32(v('Alt')),
       velX: f32(v('VelocityX')), velY: f32(v('VelocityY')),
       onPit: f32(v('OnPitRoad')), fuel: f32(v('FuelLevel')), abs: f32(v('BrakeABSactive')), lapNo: f32(v('Lap')),
       wheelSpeed: four('speed'), tyrePress: four('pressure'), tyreTempI: temps('I'), tyreTempM: temps('M'), tyreTempO: temps('O'),
@@ -108,12 +127,14 @@
       sessionType: sessType, recordedAt: ibt.header.startDate ? ibt.header.startDate * 1000 : (file && file.lastModified) || Date.now(),
       trackLenHint: trackLen, maxRpm: parseFloat(di.DriverCarRedLine) || null, steerUnit: 'deg',
       setupName: di.DriverSetupName || '', airTemp: wk.TrackAirTemp || '', trackTemp: wk.TrackSurfaceTemp || '',
-      tyreNote: 'iRacing only refreshes tyre temperature, pressure and wear readings when the car is in the pits, so tyre values reflect the end of a run.',
+      tyreLive: surfLive,
+      tyreNote: surfLive ? 'Tyre surface temperatures, which iRacing records all the way round the lap. Pressures and wear only refresh in the pits.'
+        : 'This recording only has tyre readings that refresh in the pits, so tyre values reflect the end of a run.',
     };
     const setup = info.CarSetup ? STA.setup.fromIracing(info.CarSetup, {
       car: meta.car, carClass: meta.carClass, track: trackName(meta), name: cleanSetupName(meta.setupName) || runName(meta.recordedAt),
     }) : null;
-    return finalize({ meta, hz, n, ch, marks, breaks, setup, warnings: [] });
+    return finalize({ meta, hz, n, ch, marks, breaks, setup, tyreReadings, warnings: setup ? [] : ['This recording holds no setup, so the Setup advice tab is hidden for it.'] });
   }
 
   /* Name for a setup that only exists inside a telemetry file. */
@@ -159,7 +180,7 @@
       velX: c('Local Vel Forward'), velY: c('Local Vel Lateral'), yawRate: c('Yaw Rate'),
     };
     const px = c('Pos X', 1, null, Float64Array), py = c('Pos Y', 1, null, Float64Array);
-    if (px && py) { ch.x = px; ch.y = py; }
+    if (px && py) { ch.x = px; ch.y = py; const pz = c('Pos Height', 1, null, Float64Array); if (pz) ch.z = pz; }
     if (!ch.speed) throw new Error('The recording has no Ground Speed channel.');
 
     // Unwrap the 10 Hz Lap Dist before interpolating, so the reset at the line does not smear.
@@ -212,7 +233,8 @@
       } catch (e) { /* setup stays null; reported below */ }
     }
     const warnings = (lmu.warnings || []).slice();
-    if (mt.CarSetup && !setup) warnings.push('The setup stored in this recording could not be read.');
+    if (mt.CarSetup && !setup) warnings.push('The setup stored in this recording could not be read, so the Setup advice tab is hidden for it.');
+    if (!mt.CarSetup && !mt.Live) warnings.push('This recording holds no setup, so the Setup advice tab is hidden for it.');
     return finalize({ meta, hz, n, ch, marks, breaks, setup, warnings, lmuSmoothGps: !mt.Live });
   }
 
@@ -226,8 +248,13 @@
 
     // --- position in metres ---
     let haveXY = !!(ch.x && ch.y); // already in metres
+    // Samples taken while the car is driving. iRacing logs latitude, longitude and altitude as zero
+    // in the garage, so those samples must not set the centre of the map or the lowest point.
+    const driving = (i) => ch.speed[i] > 3 && !(ch.lat && ch.lat[i] === 0 && ch.lon && ch.lon[i] === 0);
+    const rangeOf = (a) => { let lo = Infinity, hi = -Infinity; for (let i = 0; i < n; i++) { const v = a[i]; if (v === v && isFinite(v) && driving(i)) { if (v < lo) lo = v; if (v > hi) hi = v; } } return [lo, hi]; };
     if (!haveXY && ch.lat && ch.lon) {
-      const [la0, la1] = U.minMax(ch.lat), [lo0, lo1] = U.minMax(ch.lon);
+      let [la0, la1] = rangeOf(ch.lat), [lo0, lo1] = rangeOf(ch.lon);
+      if (!isFinite(la0)) { [la0, la1] = U.minMax(ch.lat); [lo0, lo1] = U.minMax(ch.lon); }
       const latC = (la0 + la1) / 2, lonC = (lo0 + lo1) / 2, R = 6371000, k = Math.PI / 180;
       let x = new Float64Array(n), y = new Float64Array(n);
       for (let i = 0; i < n; i++) { x[i] = (ch.lon[i] - lonC) * k * R * Math.cos(latC * k); y[i] = (ch.lat[i] - latC) * k * R; }
@@ -243,6 +270,16 @@
       s.warnings.push('No GPS position in this file, so the track map is estimated from heading and speed and will drift.');
     }
     if (!haveXY) s.warnings.push('No position data in this file, so the track map is unavailable.');
+
+    // --- height in metres, used by the 3D view: iRacing's altitude, or the LMU lap recorder's height ---
+    if (haveXY && !ch.z && ch.alt) ch.z = Float64Array.from(ch.alt);
+    delete ch.alt;
+    if (ch.z) {
+      const [lo, hi] = rangeOf(ch.z);
+      // A track never climbs more than about 400 m; anything else is not a height.
+      if (!isFinite(lo) || hi - lo > 1000) delete ch.z;
+      else { for (let i = 0; i < n; i++) ch.z[i] -= lo; s.heightRange = hi - lo; }
+    }
 
     // --- reference accelerations from the path itself, used to sanity-check the logged ones ---
     const dv = new Float32Array(n), latGeo = new Float32Array(n);
@@ -345,7 +382,7 @@
     if (!laps.some((l) => l.complete)) s.warnings.push('No complete lap in this recording. You can still look at the data, but lap comparison and setup advice need at least one full lap.');
   }
 
-  const GRID_SCALARS = ['speed', 'throttle', 'throttleRaw', 'brake', 'steer', 'gear', 'rpm', 'latG', 'longG', 'vertG', 'x', 'y', 'abs', 'tc', 'fuel', 'rideF', 'rideR', 'yawRate', 'clutch', 'velX', 'velY'];
+  const GRID_SCALARS = ['speed', 'throttle', 'throttleRaw', 'brake', 'steer', 'gear', 'rpm', 'latG', 'longG', 'vertG', 'x', 'y', 'abs', 'tc', 'fuel', 'rideF', 'rideR', 'yawRate', 'clutch', 'velX', 'velY', 'z'];
   const GRID_WHEELS = ['wheelSpeed', 'tyrePress', 'tyreTempI', 'tyreTempM', 'tyreTempO', 'tyreCarcass', 'brakeTemp', 'rideH', 'suspPos'];
 
   /* Resample one lap onto a distance grid from 0 to track length.
